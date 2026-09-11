@@ -2,12 +2,12 @@
 """
 Atlas of Life v6 taxonomy generator.
 
-Changes from v5:
-- Resolves Animalia, Plantae, Fungi and Bacteria explicitly from COL XR.
-- Avoids the expensive childrenAll request for every taxon.
-- Computes sampled descendant counts after building the bounded tree.
-- Keeps observations separate from taxonomy.
-- Adds visible progress logging and shorter network timeouts for GitHub Actions.
+Fast bounded traversal:
+- Resolves configured roots from the configured COL/GBIF dataset.
+- Rejects misleading low-rank exact-name matches (e.g. a genus named Bacteria).
+- Fetches only enough child pages to fill the configured per-taxon bound.
+- Computes descendant counts locally, with no childrenAll calls.
+- Emits unbuffered progress logs suitable for GitHub Actions.
 """
 from __future__ import annotations
 
@@ -34,12 +34,17 @@ HEADERS = {
     "User-Agent": "AtlasOfLifePrototype/0.6 (dataset-driven cartographic prototype)"
 }
 
-PREFERRED_ROOT_RANK = {
-    "Animalia": "KINGDOM",
-    "Plantae": "KINGDOM",
-    "Fungi": "KINGDOM",
-    "Bacteria": "DOMAIN",
+# Bacteria is represented differently by different checklist releases.
+# DOMAIN is preferred, but KINGDOM is also acceptable; never accept a low-rank
+# homonym such as a genus called "Bacteria".
+ALLOWED_ROOT_RANKS = {
+    "Animalia": ("KINGDOM",),
+    "Plantae": ("KINGDOM",),
+    "Fungi": ("KINGDOM",),
+    "Bacteria": ("DOMAIN", "KINGDOM"),
 }
+
+PAGE_SIZE = min(1000, max(1, MAX_CHILDREN))
 
 
 def get_json(url: str, retries: int = 3):
@@ -67,12 +72,15 @@ def normalize_results(payload):
     return []
 
 
+def accepted(row):
+    return (row.get("taxonomicStatus") or row.get("status") or "").upper() in {
+        "ACCEPTED", ""
+    }
+
+
 def resolve_root(name: str):
-    """
-    Search the configured checklist directly. COL XR's true top-level roots
-    include broad domains, so Animalia/Plantae/Fungi are not necessarily
-    returned by /species/root/{datasetKey}.
-    """
+    allowed_ranks = ALLOWED_ROOT_RANKS.get(name, ("KINGDOM",))
+
     query = urllib.parse.urlencode({
         "q": name,
         "datasetKey": DATASET,
@@ -81,38 +89,34 @@ def resolve_root(name: str):
     rows = normalize_results(get_json(f"{API}/species/search?{query}"))
 
     exact = [
-        row
-        for row in rows
+        row for row in rows
         if (row.get("canonicalName") or row.get("scientificName") or "").casefold()
         == name.casefold()
     ]
-
-    accepted = [
-        row
-        for row in exact
-        if (row.get("taxonomicStatus") or row.get("status") or "").upper()
-        in {"ACCEPTED", ""}
-    ]
-
-    candidates = accepted or exact or rows
-
-    preferred = PREFERRED_ROOT_RANK.get(name)
     ranked = [
-        row
-        for row in candidates
-        if (row.get("rank") or "").upper() == preferred
+        row for row in exact
+        if (row.get("rank") or "").upper() in allowed_ranks
     ]
-    if ranked:
-        candidates = ranked
+    ranked_accepted = [row for row in ranked if accepted(row)]
 
+    candidates = ranked_accepted or ranked
     if not candidates:
-        raise RuntimeError(f"Could not resolve configured root taxon {name!r}.")
+        ranks = sorted({
+            (row.get("rank") or "UNRANKED").upper()
+            for row in exact
+        })
+        raise RuntimeError(
+            f"Could not resolve root {name!r} at rank(s) {allowed_ranks}. "
+            f"Exact-name ranks returned: {ranks or ['none']}."
+        )
 
+    # Prefer the requested dataset, then the earlier allowed rank.
+    rank_order = {rank: i for i, rank in enumerate(allowed_ranks)}
     candidates.sort(
         key=lambda row: (
             row.get("datasetKey") == DATASET,
-            (row.get("taxonomicStatus") or row.get("status") or "").upper()
-            == "ACCEPTED",
+            accepted(row),
+            -rank_order.get((row.get("rank") or "").upper(), 999),
         ),
         reverse=True,
     )
@@ -120,42 +124,37 @@ def resolve_root(name: str):
 
 
 def children(key):
+    """Fetch only enough direct children to satisfy the configured bound."""
     out = []
     offset = 0
 
-    while True:
-        url = f"{API}/species/{key}/children?limit=1000&offset={offset}"
+    while len(out) < MAX_CHILDREN:
+        remaining = MAX_CHILDREN - len(out)
+        limit = min(PAGE_SIZE, remaining)
+        url = f"{API}/species/{key}/children?limit={limit}&offset={offset}"
         page = get_json(url)
         batch = normalize_results(page)
+
+        if not batch:
+            break
+
         out.extend(batch)
 
-        if not isinstance(page, dict) or page.get("endOfRecords", True) or not batch:
+        if not isinstance(page, dict) or page.get("endOfRecords", True):
             break
 
         offset += len(batch)
 
-    return out
+    return out[:MAX_CHILDREN]
 
 
 def clean_usage(u):
     return {
         "id": str(u.get("key")),
         "key": u.get("key"),
-        "parentId": (
-            str(u.get("parentKey"))
-            if u.get("parentKey") is not None
-            else None
-        ),
-        "scientificName": (
-            u.get("scientificName")
-            or u.get("canonicalName")
-            or "Unnamed"
-        ),
-        "canonicalName": (
-            u.get("canonicalName")
-            or u.get("scientificName")
-            or "Unnamed"
-        ),
+        "parentId": str(u.get("parentKey")) if u.get("parentKey") is not None else None,
+        "scientificName": u.get("scientificName") or u.get("canonicalName") or "Unnamed",
+        "canonicalName": u.get("canonicalName") or u.get("scientificName") or "Unnamed",
         "rank": (u.get("rank") or "UNRANKED").upper(),
         "status": u.get("taxonomicStatus") or u.get("status") or "",
         "vernacularName": u.get("vernacularName"),
@@ -164,34 +163,18 @@ def clean_usage(u):
 
 def child_priority(u):
     rank_score = {
-        "DOMAIN": 10,
-        "KINGDOM": 9,
-        "PHYLUM": 8,
-        "CLASS": 7,
-        "ORDER": 6,
-        "FAMILY": 5,
-        "GENUS": 4,
-        "SPECIES": 3,
+        "DOMAIN": 10, "KINGDOM": 9, "PHYLUM": 8, "CLASS": 7, "ORDER": 6,
+        "FAMILY": 5, "GENUS": 4, "SPECIES": 3,
     }.get((u.get("rank") or "").upper(), 1)
-
     name = u.get("canonicalName") or u.get("scientificName") or ""
-    accepted = (
-        (u.get("taxonomicStatus") or u.get("status") or "").upper()
-        == "ACCEPTED"
-    )
-
-    return (
-        1 if accepted else 0,
-        rank_score,
-        float(BOOSTS.get(name, 0)),
-    )
+    is_accepted = accepted(u)
+    return (1 if is_accepted else 0, rank_score, float(BOOSTS.get(name, 0)))
 
 
 def main():
-    root_names = CFG["taxonomy"]["roots"]
     selected_roots = []
 
-    for name in root_names:
+    for name in CFG["taxonomy"]["roots"]:
         print(f"Resolving root: {name}", flush=True)
         root = resolve_root(name)
         print(
@@ -202,16 +185,6 @@ def main():
         )
         selected_roots.append(root)
 
-    print("Resolved roots:", flush=True)
-    for row in selected_roots:
-        print(
-            " -",
-            row.get("canonicalName") or row.get("scientificName"),
-            row.get("rank"),
-            row.get("key"),
-            flush=True,
-        )
-
     taxa = []
     seen = set()
     queue = deque((row, 0, None) for row in selected_roots)
@@ -219,23 +192,19 @@ def main():
     while queue and len(taxa) < MAX_TAXA:
         u, depth, parent_override = queue.popleft()
         key = u.get("key")
-
         if key is None or key in seen:
             continue
-
         seen.add(key)
 
         node = clean_usage(u)
         if parent_override is not None:
             node["parentId"] = str(parent_override)
-
         node["depth"] = depth
         taxa.append(node)
 
         if len(taxa) % 100 == 0:
             print(
-                f"Progress: {len(taxa)}/{MAX_TAXA} taxa sampled; "
-                f"queue={len(queue)}",
+                f"Progress: {len(taxa)}/{MAX_TAXA} taxa; queue={len(queue)}",
                 flush=True,
             )
 
@@ -249,8 +218,7 @@ def main():
             continue
 
         kids = [
-            k
-            for k in kids
+            k for k in kids
             if (k.get("taxonomicStatus") or k.get("status") or "").upper()
             not in {"SYNONYM", "HETEROTYPIC_SYNONYM"}
         ]
@@ -261,7 +229,6 @@ def main():
 
     by_id = {n["id"]: n for n in taxa}
     kids_by_parent = defaultdict(list)
-
     for node in taxa:
         if node["parentId"] in by_id:
             kids_by_parent[node["parentId"]].append(node["id"])
@@ -271,27 +238,21 @@ def main():
     def count_desc(node_id):
         if node_id in descendant_count:
             return descendant_count[node_id]
-
         total = 0
         for child_id in kids_by_parent.get(node_id, []):
             total += 1 + count_desc(child_id)
-
         descendant_count[node_id] = total
         return total
 
     for node in taxa:
         proxy = count_desc(node["id"])
         node["descendantProxy"] = proxy
-
         icon = float(BOOSTS.get(node["canonicalName"], 1))
         node["popularityBoost"] = icon
         node["weight"] = max(
             float(CFG["weights"]["minWeight"]),
             float(CFG["weights"]["base"])
-            + math.pow(
-                max(1, proxy),
-                float(CFG["weights"]["descendantExponent"]),
-            )
+            + math.pow(max(1, proxy), float(CFG["weights"]["descendantExponent"]))
             + icon,
         )
 
@@ -299,44 +260,27 @@ def main():
         "meta": {
             "source": "Catalogue of Life eXtended Release via GBIF Species API",
             "datasetKey": DATASET,
-            "generatedAt": time.strftime(
-                "%Y-%m-%dT%H:%M:%SZ",
-                time.gmtime(),
-            ),
+            "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "taxa": len(taxa),
             "roots": [
                 {
-                    "name": (
-                        r.get("canonicalName")
-                        or r.get("scientificName")
-                    ),
+                    "name": r.get("canonicalName") or r.get("scientificName"),
                     "rank": r.get("rank"),
                     "key": r.get("key"),
                 }
                 for r in selected_roots
             ],
-            "note": (
-                "Bounded multi-root prototype; weights use sampled "
-                "descendants plus icon boosts."
-            ),
+            "note": "Bounded multi-root prototype; weights use sampled descendants plus icon boosts.",
         },
         "taxa": taxa,
     }
 
     target = ROOT / "data" / "taxa.json"
     target.write_text(
-        json.dumps(
-            payload,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ),
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8",
     )
-
-    print(
-        f"Wrote {len(taxa)} taxa to {target}",
-        flush=True,
-    )
+    print(f"Wrote {len(taxa)} taxa to {target}", flush=True)
 
 
 if __name__ == "__main__":
