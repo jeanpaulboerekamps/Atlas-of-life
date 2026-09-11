@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """
-Atlas of Life v6 taxonomy generator — ChecklistBank/COL XR edition.
+Atlas of Life v6 taxonomy generator — GBIF Species API v2 / COL XR.
 
-Why this version exists:
-- GBIF's legacy /v1/species search/children endpoints are not the right way to
-  browse the current Catalogue of Life Extended Release (COL XR).
-- COL XR uses Catalogue of Life identifiers and is directly browsable through
-  the ChecklistBank tree API.
-- This generator resolves configured roots in ChecklistBank and walks only
-  direct children, bounded by maxDepth, maxTaxa and maxChildrenPerTaxon.
+This version uses GBIF's v2 taxonomy service, which is backed by ChecklistBank.
+Taxon identifiers are checklist-scoped strings, and the configured GBIF dataset
+UUID selects the Catalogue of Life Extended Release (COL XR).
+
+Key properties:
+- resolves each configured root at an explicitly allowed high rank;
+- traverses only direct accepted children;
+- fetches at most maxChildrenPerTaxon children for each node;
+- computes descendant counts locally (no expensive descendant API calls);
+- emits immediate progress logs for GitHub Actions.
 """
 from __future__ import annotations
 
@@ -24,15 +27,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 CFG = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
 
-# Keep the GBIF checklist UUID in output metadata because the rest of the app
-# may use it for occurrence queries/maps. Taxonomy traversal itself uses CLB.
-GBIF_CHECKLIST_KEY = CFG["taxonomy"]["datasetKey"]
-
-# ChecklistBank alias for the latest monthly Catalogue of Life Extended Release.
-# You may optionally add taxonomy.checklistBankDataset to config.json to pin
-# a specific release/dataset later.
-CLB_DATASET = CFG["taxonomy"].get("checklistBankDataset", "3LXR")
-CLB_API = "https://api.checklistbank.org"
+DATASET = CFG["taxonomy"]["datasetKey"]
+API = "https://api.gbif.org/v2"
 
 MAX_DEPTH = int(CFG["limits"]["maxDepth"])
 MAX_TAXA = int(CFG["limits"]["maxTaxa"])
@@ -41,15 +37,16 @@ BOOSTS = CFG["weights"]["iconBoosts"]
 
 HEADERS = {
     "Accept": "application/json",
-    "User-Agent": "AtlasOfLifePrototype/0.6 (COL XR via ChecklistBank)",
+    "User-Agent": "AtlasOfLifePrototype/0.6 (GBIF Species API v2 / COL XR)",
 }
 
-ALLOWED_ROOT_RANKS = {
-    "Animalia": {"KINGDOM"},
-    "Plantae": {"KINGDOM"},
-    "Fungi": {"KINGDOM"},
-    # Checklist releases may express this high-level group differently.
-    "Bacteria": {"DOMAIN", "SUPERKINGDOM", "KINGDOM"},
+# Try ranks in this order.  This prevents a low-rank homonym such as a genus
+# called "Bacteria" from ever being selected as a configured root.
+ROOT_RANKS = {
+    "Animalia": ("KINGDOM",),
+    "Plantae": ("KINGDOM",),
+    "Fungi": ("KINGDOM",),
+    "Bacteria": ("DOMAIN", "SUPERKINGDOM", "KINGDOM"),
 }
 
 
@@ -67,112 +64,122 @@ def get_json(url: str, retries: int = 3):
             time.sleep(1.5 * (attempt + 1))
 
 
-def as_rows(payload):
-    """Normalize common ChecklistBank list/page response shapes."""
-    if isinstance(payload, list):
-        return [x for x in payload if isinstance(x, dict)]
-
+def page_results(payload):
     if isinstance(payload, dict):
-        for key in ("result", "results", "items"):
-            value = payload.get(key)
-            if isinstance(value, list):
-                return [x for x in value if isinstance(x, dict)]
-
-        # Some single-record endpoints return a record directly.
-        if any(k in payload for k in ("id", "key", "name", "label")):
-            return [payload]
-
+        for key in ("results", "result", "items"):
+            rows = payload.get(key)
+            if isinstance(rows, list):
+                return [row for row in rows if isinstance(row, dict)]
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
     return []
 
 
-def row_id(row):
-    value = row.get("id")
+def taxon_id(row):
+    value = row.get("taxonID")
     if value is None:
         value = row.get("key")
+    if value is None:
+        value = row.get("id")
     return str(value) if value is not None else None
 
 
-def row_name(row):
-    # ChecklistBank tree nodes commonly expose label; usage records commonly
-    # expose scientificName/name. Handle all of them defensively.
-    value = (
-        row.get("canonicalName")
-        or row.get("scientificName")
-        or row.get("label")
-        or row.get("name")
-    )
-    if isinstance(value, dict):
-        value = value.get("scientificName") or value.get("name") or value.get("label")
+def taxon_name(row):
+    value = row.get("scientificName") or row.get("canonicalName") or row.get("label")
     return str(value) if value else "Unnamed"
 
 
-def row_rank(row):
-    value = row.get("rank") or row.get("taxonRank") or "UNRANKED"
-    if isinstance(value, dict):
-        value = value.get("name") or value.get("label") or "UNRANKED"
+def taxon_rank(row):
+    value = row.get("taxonRank") or row.get("rank") or "UNRANKED"
     return str(value).upper()
 
 
+def taxon_status(row):
+    value = row.get("taxonomicStatus") or row.get("status") or ""
+    return str(value).upper()
+
+
+def parent_id(row):
+    value = row.get("parentNameUsageID")
+    if value is None:
+        value = row.get("parentId")
+    return str(value) if value is not None else None
+
+
 def resolve_root(name: str):
-    params = urllib.parse.urlencode({
-        "q": name,
-        "type": "exact",
-        "limit": 100,
-    })
-    url = f"{CLB_API}/dataset/{urllib.parse.quote(str(CLB_DATASET))}/nameusage/search?{params}"
-    rows = as_rows(get_json(url))
+    ranks = ROOT_RANKS.get(name, ("KINGDOM",))
 
-    exact = [r for r in rows if row_name(r).casefold() == name.casefold()]
-    allowed = ALLOWED_ROOT_RANKS.get(name, {"KINGDOM"})
-    ranked = [r for r in exact if row_rank(r) in allowed]
-
-    if not ranked:
-        ranks = sorted({row_rank(r) for r in exact})
-        raise RuntimeError(
-            f"Could not resolve COL XR root {name!r} at rank(s) {sorted(allowed)}. "
-            f"Exact-name ranks returned: {ranks or ['none']}."
+    for rank in ranks:
+        params = urllib.parse.urlencode(
+            {
+                "q": name,
+                "taxonRank": rank,
+                "limit": 100,
+            }
         )
+        url = (
+            f"{API}/taxon/search/{urllib.parse.quote(str(DATASET), safe='')}"
+            f"?{params}"
+        )
+        rows = page_results(get_json(url))
 
-    # Prefer an accepted taxon if status is present. Tree traversal itself only
-    # uses accepted taxa, so this mainly disambiguates search results.
-    def score(row):
-        status = str(row.get("status") or row.get("taxonomicStatus") or "").upper()
-        accepted = status in {"ACCEPTED", ""}
-        return (accepted, -len(row_name(row)))
+        exact = [
+            row
+            for row in rows
+            if taxon_name(row).casefold() == name.casefold()
+            and taxon_rank(row) == rank
+        ]
 
-    ranked.sort(key=score, reverse=True)
-    root = ranked[0]
+        # Prefer accepted records.  If status is absent, the v2 search record
+        # is still usable, so an empty status is accepted as a fallback.
+        accepted = [
+            row
+            for row in exact
+            if taxon_status(row) in {"ACCEPTED", ""}
+        ]
+        candidates = accepted or exact
 
-    if row_id(root) is None:
-        raise RuntimeError(f"Resolved root {name!r} has no ChecklistBank taxon id.")
+        if candidates:
+            root = candidates[0]
+            if taxon_id(root) is None:
+                raise RuntimeError(
+                    f"Resolved {name!r} at rank {rank}, but response has no taxonID."
+                )
+            return root
 
-    return root
-
-
-def children(taxon_id: str):
-    # Tree API returns direct accepted children only. No pagination through
-    # thousands of irrelevant rows is needed for this bounded prototype.
-    url = (
-        f"{CLB_API}/dataset/{urllib.parse.quote(str(CLB_DATASET))}"
-        f"/tree/{urllib.parse.quote(str(taxon_id))}/children"
-        "?insertPlaceholder=false"
+    raise RuntimeError(
+        f"Could not resolve configured root {name!r} "
+        f"at any allowed rank {ranks} in dataset {DATASET}."
     )
-    rows = as_rows(get_json(url))
+
+
+def children(key: str):
+    # GBIF v2 tree endpoint returns direct accepted children and is paginated.
+    # We only request as many as the bounded prototype can use.
+    limit = max(1, MAX_CHILDREN)
+    params = urllib.parse.urlencode({"limit": limit, "offset": 0})
+    url = (
+        f"{API}/taxon/tree/{urllib.parse.quote(str(DATASET), safe='')}/"
+        f"{urllib.parse.quote(str(key), safe='')}/children?{params}"
+    )
+    rows = page_results(get_json(url))
     return rows[:MAX_CHILDREN]
 
 
-def clean_node(row, parent_id, depth):
-    taxon_id = row_id(row)
-    name = row_name(row)
+def clean_usage(row, parent_override=None, depth=0):
+    key = taxon_id(row)
+    parent = str(parent_override) if parent_override is not None else parent_id(row)
+    name = taxon_name(row)
+
     return {
-        "id": taxon_id,
-        "key": taxon_id,
-        "parentId": str(parent_id) if parent_id is not None else None,
+        "id": str(key),
+        "key": key,
+        "parentId": parent,
         "scientificName": name,
         "canonicalName": name,
-        "rank": row_rank(row),
-        "status": str(row.get("status") or "ACCEPTED").upper(),
-        "vernacularName": row.get("vernacularName"),
+        "rank": taxon_rank(row),
+        "status": taxon_status(row) or "ACCEPTED",
+        "vernacularName": None,
         "depth": depth,
     }
 
@@ -188,22 +195,23 @@ def child_priority(row):
         "FAMILY": 5,
         "GENUS": 4,
         "SPECIES": 3,
-    }.get(row_rank(row), 1)
+    }.get(taxon_rank(row), 1)
 
-    name = row_name(row)
-    return (rank_score, float(BOOSTS.get(name, 0)))
+    name = taxon_name(row)
+    accepted = taxon_status(row) in {"ACCEPTED", ""}
+    return (1 if accepted else 0, rank_score, float(BOOSTS.get(name, 0)))
 
 
 def main():
-    print(f"ChecklistBank dataset: {CLB_DATASET}", flush=True)
+    print(f"GBIF Species API v2 dataset: {DATASET}", flush=True)
 
     selected_roots = []
     for name in CFG["taxonomy"]["roots"]:
         print(f"Resolving root: {name}", flush=True)
         root = resolve_root(name)
         print(
-            f"Resolved {name}: {row_name(root)} "
-            f"[{row_rank(root)}] id={row_id(root)}",
+            f"Resolved {name}: {taxon_name(root)} "
+            f"[{taxon_rank(root)}] id={taxon_id(root)}",
             flush=True,
         )
         selected_roots.append(root)
@@ -213,14 +221,14 @@ def main():
     queue = deque((root, 0, None) for root in selected_roots)
 
     while queue and len(taxa) < MAX_TAXA:
-        row, depth, parent_id = queue.popleft()
-        taxon_id = row_id(row)
+        row, depth, parent_override = queue.popleft()
+        key = taxon_id(row)
 
-        if taxon_id is None or taxon_id in seen:
+        if key is None or key in seen:
             continue
 
-        seen.add(taxon_id)
-        taxa.append(clean_node(row, parent_id, depth))
+        seen.add(key)
+        taxa.append(clean_usage(row, parent_override, depth))
 
         if len(taxa) % 100 == 0:
             print(
@@ -232,17 +240,23 @@ def main():
             continue
 
         try:
-            kids = children(taxon_id)
+            kids = children(key)
         except Exception as exc:
-            print(f"WARN children {taxon_id}: {exc}", flush=True)
+            print(f"WARN children {key}: {exc}", flush=True)
             continue
 
+        kids = [
+            child
+            for child in kids
+            if taxon_status(child)
+            not in {"SYNONYM", "HETEROTYPIC_SYNONYM", "HOMOTYPIC_SYNONYM"}
+        ]
         kids.sort(key=child_priority, reverse=True)
 
         for child in kids[:MAX_CHILDREN]:
-            queue.append((child, depth + 1, taxon_id))
+            queue.append((child, depth + 1, key))
 
-    # Compute descendant counts entirely inside the sampled bounded tree.
+    # Count descendants only within the bounded sampled tree.
     by_id = {node["id"]: node for node in taxa}
     kids_by_parent = defaultdict(list)
 
@@ -272,29 +286,31 @@ def main():
         node["weight"] = max(
             float(CFG["weights"]["minWeight"]),
             float(CFG["weights"]["base"])
-            + math.pow(max(1, proxy), float(CFG["weights"]["descendantExponent"]))
+            + math.pow(
+                max(1, proxy),
+                float(CFG["weights"]["descendantExponent"]),
+            )
             + icon,
         )
 
     payload = {
         "meta": {
-            "source": "Catalogue of Life Extended Release via ChecklistBank tree API",
-            "datasetKey": GBIF_CHECKLIST_KEY,
-            "checklistBankDataset": CLB_DATASET,
+            "source": "Catalogue of Life Extended Release via GBIF Species API v2",
+            "datasetKey": DATASET,
             "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "taxa": len(taxa),
             "roots": [
                 {
-                    "name": row_name(root),
-                    "rank": row_rank(root),
-                    "key": row_id(root),
+                    "name": taxon_name(root),
+                    "rank": taxon_rank(root),
+                    "key": taxon_id(root),
                 }
                 for root in selected_roots
             ],
             "note": (
                 "Bounded multi-root COL XR prototype; taxonomy is traversed "
-                "through ChecklistBank and weights use sampled descendants "
-                "plus icon boosts."
+                "through GBIF Species API v2 and weights use sampled "
+                "descendants plus icon boosts."
             ),
         },
         "taxa": taxa,
