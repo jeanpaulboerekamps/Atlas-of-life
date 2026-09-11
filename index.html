@@ -1,57 +1,180 @@
 <!doctype html>
 <html lang="nl"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — dataset prototype</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Atlas of Life — semantic map v6</title>
 <style>
-:root{--sea:#e5efeb;--ink:#18372f;--panel:#fffdf9ee}
-*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;font-family:system-ui,-apple-system,sans-serif;background:var(--sea);color:var(--ink)}
-#app{position:relative;width:100%;height:100%}svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
-.taxon{cursor:pointer;stroke:#fffdf8;stroke-linejoin:round;vector-effect:non-scaling-stroke}.taxon:hover{filter:brightness(1.035)}
-.label{font-weight:700;fill:#18372f;pointer-events:none;paint-order:stroke;stroke:#fff9;stroke-width:2px}.rank{font-size:9px;fill:#47675d;pointer-events:none}
-.top{position:absolute;top:14px;left:14px;right:14px;display:flex;gap:10px;pointer-events:none}
-.card{background:var(--panel);border:1px solid #38574b24;border-radius:15px;box-shadow:0 8px 30px #38574b20;backdrop-filter:blur(10px);pointer-events:auto}
-.brand{padding:10px 13px}.brand b{display:block}.brand small{color:#61776f}
-.search{flex:1;max-width:520px;padding:8px 12px}.search input{border:0;outline:0;background:transparent;width:100%;font-size:14px;color:#18372f}
-.controls{margin-left:auto;padding:7px}.controls button{border:1px solid #38574b22;background:#fffdf9;border-radius:10px;padding:8px 10px}
-#crumbs{position:absolute;top:76px;left:14px;display:flex;gap:5px;flex-wrap:wrap;max-width:75vw}.crumb{background:#fffdf9e8;border:1px solid #38574b22;border-radius:999px;padding:5px 8px;font-size:10px;cursor:pointer}
-.status{position:absolute;left:14px;bottom:14px;padding:9px 11px;font-size:10px;color:#536e65}.zoom{position:absolute;right:14px;bottom:14px;padding:8px 10px;font-size:10px}
-</style></head><body><div id="app">
-<svg id="map" viewBox="0 0 2400 1500"><rect width="2400" height="1500" fill="#e5efeb"/><g id="world"></g></svg>
-<div class="top"><div class="card brand"><b>Atlas of Life</b><small>dataset-driven prototype</small></div>
-<div class="card search"><input id="search" placeholder="Zoek wetenschappelijke naam…" autocomplete="off"></div>
+:root{--sea:#e6f0eb;--ink:#17372f;--panel:#fffdf9ee;--muted:#60776e}
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--sea);font-family:system-ui,-apple-system,sans-serif;color:var(--ink)}
+#app{position:relative;width:100%;height:100%;background:linear-gradient(145deg,#f4f6ef,#dae9e6)}
+svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-select:none;-webkit-user-select:none}
+.sea{fill:#e3efea}.grid{fill:none;stroke:#5e7e73;stroke-width:1;opacity:.09;vector-effect:non-scaling-stroke}
+.taxonPath{cursor:pointer;stroke:#fffdf8;stroke-linejoin:round;vector-effect:non-scaling-stroke;transition:opacity .18s}
+.taxonPath:hover{filter:brightness(1.035)}
+.label{font-weight:750;fill:#18372f;pointer-events:none;paint-order:stroke;stroke:#fffdf8cc;stroke-width:2.4px;stroke-linejoin:round}
+.latin{font-family:Georgia,serif;font-style:italic;fill:#3f6258;pointer-events:none;paint-order:stroke;stroke:#fffdf8bb;stroke-width:1.6px}
+.hidden{opacity:0;pointer-events:none}
+.top{position:absolute;left:16px;right:16px;top:14px;display:flex;gap:10px;align-items:center;pointer-events:none}
+.card{background:var(--panel);border:1px solid #35524723;border-radius:16px;box-shadow:0 9px 30px #3552471d;backdrop-filter:blur(11px);pointer-events:auto}
+.brand{padding:10px 13px;min-width:205px}.brand b{display:block;font-size:18px}.brand small{color:var(--muted)}
+.search{flex:1;max-width:560px;padding:9px 12px}.search input{width:100%;border:0;outline:0;background:transparent;color:var(--ink);font-size:14px}
+.controls{margin-left:auto;padding:7px;display:flex;gap:7px}.controls button{border:1px solid #35524725;background:#fffdf9;color:#24463c;border-radius:10px;padding:8px 10px}
+#crumbs{position:absolute;left:16px;top:76px;display:flex;gap:5px;flex-wrap:wrap;max-width:72vw}.crumb{background:#fffdf9e9;border:1px solid #35524720;border-radius:999px;padding:5px 8px;font-size:10px;cursor:pointer}
+.status{position:absolute;left:16px;bottom:16px;padding:9px 11px;font-size:10px;color:#536d64}
+.zoom{position:absolute;right:16px;bottom:16px;padding:8px 10px;font-size:10px}
+.level{position:absolute;right:16px;top:77px;padding:7px 10px;font-size:10px;color:#4d6b61}
+</style></head>
+<body><div id="app">
+<svg id="map" viewBox="0 0 2400 1500">
+<rect class="sea" width="2400" height="1500"/>
+<g class="grid"><path d="M0 300 C600 245 1650 350 2400 280"/><path d="M0 730 C700 650 1700 810 2400 700"/><path d="M0 1130 C650 1060 1700 1200 2400 1090"/></g>
+<g id="regions"></g><g id="labels"></g>
+</svg>
+<div class="top"><div class="card brand"><b>Atlas of Life</b><small>semantic cartographic prototype</small></div>
+<div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
 <div class="card controls"><button id="home">Wereld</button></div></div>
-<div id="crumbs"></div><div id="status" class="card status">taxonomie laden…</div><div id="zoom" class="card zoom">1.00×</div>
+<div id="crumbs"></div>
+<div id="status" class="card status">taxonomie laden…</div>
+<div id="level" class="card level">wereld</div>
+<div id="zoom" class="card zoom">1.00×</div>
 </div>
 <script>
 (async()=>{
-const svg=document.getElementById('map'), g=document.getElementById('world'), status=document.getElementById('status'), zoomEl=document.getElementById('zoom'), crumbs=document.getElementById('crumbs');
+const NS='http://www.w3.org/2000/svg';
+const svg=document.getElementById('map'), rg=document.getElementById('regions'), lg=document.getElementById('labels');
+const status=document.getElementById('status'), zoomEl=document.getElementById('zoom'), levelEl=document.getElementById('level'), crumbs=document.getElementById('crumbs');
 const payload=await fetch('data/taxa.json',{cache:'no-store'}).then(r=>r.json());
-const taxa=payload.taxa, byId=new Map(taxa.map(x=>[String(x.id),x]));
-let roots=taxa.filter(x=>!x.parentId||!byId.has(String(x.parentId)));
-if(roots.length>1){const life={id:'__life',parentId:null,canonicalName:'Life',rank:'ROOT',weight:roots.reduce((a,x)=>a+x.weight,0)}; taxa.push(life);byId.set(life.id,life);roots.forEach(x=>x.parentId=life.id);roots=[life]}
-const children=new Map(); taxa.forEach(t=>{const p=String(t.parentId);if(!children.has(p))children.set(p,[]);children.get(p).push(t)});
-const colors={KINGDOM:'#8fb9d4',DOMAIN:'#a6bcc6',PHYLUM:'#9fc6b1',CLASS:'#a8cfa1',ORDER:'#cbd899',FAMILY:'#bcd8b1',GENUS:'#c9dfc1',SPECIES:'#dce9d6',ROOT:'#eef3eb'};
+const taxa=payload.taxa;
+const byId=new Map(taxa.map(t=>[String(t.id),t]));
+let roots=taxa.filter(t=>!t.parentId||!byId.has(String(t.parentId)));
+if(roots.length>1){
+  const life={id:'__life',parentId:null,canonicalName:'Life',rank:'ROOT',weight:roots.reduce((a,t)=>a+(+t.weight||1),0),depth:-1};
+  taxa.push(life);byId.set(life.id,life);roots.forEach(t=>t.parentId=life.id);roots=[life];
+}
+const children=new Map();
+taxa.forEach(t=>{const p=String(t.parentId);if(!children.has(p))children.set(p,[]);children.get(p).push(t)});
+
 function hash(s){let h=2166136261;for(const c of String(s)){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return(h>>>0)/4294967295}
-function tint(hex,j){let n=parseInt(hex.slice(1),16),r=n>>16,gc=(n>>8)&255,b=n&255,f=.06+j*.16;return`rgb(${Math.round(r+(255-r)*f)},${Math.round(gc+(255-gc)*f)},${Math.round(b+(255-b)*f)})`}
-function sum(t){const c=children.get(String(t.id))||[];if(!c.length)return Math.max(.3,+t.weight||1);return c.reduce((a,x)=>a+sum(x),0)+Math.max(.3,+t.weight||1)*.08}
-function layout(t,r,depth=0){t.rect=r;t.depth=depth;const cs=(children.get(String(t.id))||[]).sort((a,b)=>sum(b)-sum(a));if(!cs.length)return;let rem=cs.reduce((a,x)=>a+sum(x),0),x=r.x,y=r.y,w=r.w,h=r.h;for(let i=0;i<cs.length;i++){let c=cs[i],frac=sum(c)/rem,rr;if(i===cs.length-1)rr={x,y,w,h};else if(w>h){let cut=w*frac;rr={x,y,w:cut,h};x+=cut;w-=cut}else{let cut=h*frac;rr={x,y,w,h:cut};y+=cut;h-=cut}rem-=sum(c);let gap=Math.min(12,4+depth*1.4);layout(c,{x:rr.x+gap,y:rr.y+gap,w:Math.max(2,rr.w-gap*2),h:Math.max(2,rr.h-gap*2)},depth+1)}}
-layout(roots[0],{x:35,y:35,w:2330,h:1430});
-function pathFor(t){const r=t.rect,j=hash(t.id);let rad=Math.max(5,Math.min(40,Math.min(r.w,r.h)*(.10+.08*j)));return`M${r.x+rad},${r.y}H${r.x+r.w-rad}Q${r.x+r.w},${r.y} ${r.x+r.w},${r.y+rad}V${r.y+r.h-rad}Q${r.x+r.w},${r.y+r.h} ${r.x+r.w-rad},${r.y+r.h}H${r.x+rad}Q${r.x},${r.y+r.h} ${r.x},${r.y+r.h-rad}V${r.y+rad}Q${r.x},${r.y} ${r.x+rad},${r.y}Z`}
-function draw(){g.innerHTML='';[...taxa].sort((a,b)=>a.depth-b.depth).forEach(t=>{if(t.id==='__life')return;let p=document.createElementNS('http://www.w3.org/2000/svg','path');p.setAttribute('d',pathFor(t));p.setAttribute('fill',tint(colors[t.rank]||'#b9d1c5',hash(t.id)));p.setAttribute('class','taxon');p.setAttribute('stroke-width',Math.max(1,8-t.depth));p.onclick=e=>{e.stopPropagation();focus(t)};g.appendChild(p);let area=t.rect.w*t.rect.h;if(area>8500&&t.rect.w>70&&t.rect.h>35){let tx=document.createElementNS('http://www.w3.org/2000/svg','text');tx.setAttribute('x',t.rect.x+10);tx.setAttribute('y',t.rect.y+22);tx.setAttribute('font-size',Math.max(10,Math.min(24,9+Math.sqrt(area)/45)));tx.setAttribute('class','label');tx.textContent=t.vernacularName||t.canonicalName;g.appendChild(tx)}})}
-draw();
-let world={x:0,y:0,w:2400,h:1500},view={...world},target={...world},ptr=new Map(),drag=false,last=null,pinch=null;
+function h2(s,k=0){return hash(String(s)+'|'+k)}
+const palette={DOMAIN:'#9eb9c4',KINGDOM:'#8fb9d4',PHYLUM:'#96c2ae',CLASS:'#a6cda0',ORDER:'#ccd995',FAMILY:'#bbd7ad',GENUS:'#cbdcbd',SPECIES:'#dfe9d8',ROOT:'#eef3eb'};
+function tint(hex,f){let n=parseInt(hex.slice(1),16),r=n>>16,g=(n>>8)&255,b=n&255;return`rgb(${Math.round(r+(255-r)*f)},${Math.round(g+(255-g)*f)},${Math.round(b+(255-b)*f)})`}
+function subtree(t){const cs=children.get(String(t.id))||[];if(!cs.length)return Math.max(.3,+t.weight||1);return cs.reduce((a,c)=>a+subtree(c),0)+Math.max(.3,+t.weight||1)*.08}
+
+const world={x:0,y:0,w:2400,h:1500};
+roots[0].geom={cx:1200,cy:760,rx:1110,ry:650};
+
+// Weighted nested island packing. Siblings repel one another but remain inside
+// their parent's ellipse. This intentionally leaves "sea" between taxa.
+function pack(parent){
+  const cs=(children.get(String(parent.id))||[]).sort((a,b)=>subtree(b)-subtree(a));
+  if(!cs.length)return;
+  const pg=parent.geom,total=cs.reduce((a,c)=>a+subtree(c),0);
+  const base=Math.min(pg.rx,pg.ry);
+  const items=cs.map((c,i)=>{
+    const share=subtree(c)/total;
+    const r=Math.max(base*.045,base*Math.sqrt(share)*.72);
+    const asp=.78+.45*h2(c.id,1);
+    const angle=2.3999632297*i + h2(c.id,2)*.7;
+    const dist=base*.10*Math.sqrt(i+1);
+    return {c,rx:r*asp,ry:r/asp,x:pg.cx+Math.cos(angle)*dist,y:pg.cy+Math.sin(angle)*dist};
+  });
+  for(let it=0;it<95;it++){
+    for(let i=0;i<items.length;i++){
+      let a=items[i],fx=(pg.cx-a.x)*.012,fy=(pg.cy-a.y)*.012;
+      for(let j=0;j<items.length;j++)if(i!==j){
+        let b=items[j],dx=a.x-b.x,dy=a.y-b.y;
+        let d=Math.hypot(dx,dy)||.001;
+        let min=(Math.max(a.rx,a.ry)+Math.max(b.rx,b.ry))*.90;
+        if(d<min){let q=(min-d)/min*.72;fx+=dx/d*q*18;fy+=dy/d*q*18}
+      }
+      a.x+=fx;a.y+=fy;
+      let nx=(a.x-pg.cx)/Math.max(1,pg.rx-a.rx*1.12),ny=(a.y-pg.cy)/Math.max(1,pg.ry-a.ry*1.12);
+      let q=Math.sqrt(nx*nx+ny*ny);
+      if(q>1){a.x=pg.cx+(a.x-pg.cx)/q;a.y=pg.cy+(a.y-pg.cy)/q}
+    }
+  }
+  for(const a of items){
+    a.c.geom={cx:a.x,cy:a.y,rx:a.rx*.90,ry:a.ry*.90};
+    pack(a.c);
+  }
+}
+pack(roots[0]);
+
+function organicPath(t){
+  const q=t.geom;if(!q)return '';
+  const n=18,pts=[];
+  for(let i=0;i<n;i++){
+    const a=Math.PI*2*i/n;
+    const noise=.90+.10*h2(t.id,i+10);
+    pts.push([q.cx+Math.cos(a)*q.rx*noise,q.cy+Math.sin(a)*q.ry*noise]);
+  }
+  const mids=pts.map((p,i)=>[(p[0]+pts[(i+1)%n][0])/2,(p[1]+pts[(i+1)%n][1])/2]);
+  let d=`M${mids[n-1][0]},${mids[n-1][1]}`;
+  for(let i=0;i<n;i++)d+=` Q${pts[i][0]},${pts[i][1]} ${mids[i][0]},${mids[i][1]}`;
+  return d+'Z';
+}
+function minZoom(t){
+  const d=Math.max(0,t.depth||0);
+  const rank=(t.rank||'').toUpperCase();
+  const rankZ={DOMAIN:1,KINGDOM:1,PHYLUM:1.25,CLASS:1.7,ORDER:2.5,FAMILY:3.8,GENUS:5.7,SPECIES:8.2};
+  return Math.max(rankZ[rank]||1.2,1+d*.58);
+}
+const elems=[];
+[...taxa].sort((a,b)=>(a.depth||0)-(b.depth||0)).forEach(t=>{
+  if(t.id==='__life'||!t.geom)return;
+  const p=document.createElementNS(NS,'path');
+  p.setAttribute('d',organicPath(t));
+  p.setAttribute('fill',tint(palette[t.rank]||'#b7d0c2',.02+.13*h2(t.id,50)));
+  p.setAttribute('class','taxonPath');
+  p.setAttribute('stroke-width',Math.max(1.1,8-(t.depth||0)*1.05));
+  p.dataset.minz=minZoom(t);p.dataset.id=t.id;
+  p.onclick=e=>{e.stopPropagation();focus(t)};
+  rg.appendChild(p);
+
+  const text=document.createElementNS(NS,'text');
+  text.setAttribute('x',t.geom.cx);text.setAttribute('y',t.geom.cy);
+  text.setAttribute('text-anchor','middle');text.setAttribute('class','label');
+  text.textContent=t.vernacularName||t.canonicalName;
+  text.dataset.minz=(minZoom(t)*1.03);text.dataset.id=t.id;
+  lg.appendChild(text);
+  elems.push({t,p,text});
+});
+
+let view={...world},target={...world},ptr=new Map(),drag=false,last=null,pinch=null,lastSemantic=-1;
 function fit(r){let ar=innerWidth/innerHeight,rr=r.w/r.h;if(rr>ar){let nh=r.w/ar,d=nh-r.h;r.y-=d/2;r.h=nh}else{let nw=r.h*ar,d=nw-r.w;r.x-=d/2;r.w=nw}}
-function focus(t){let r={...t.rect},pad=.12;r.x-=r.w*pad;r.y-=r.h*pad;r.w*=1+2*pad;r.h*=1+2*pad;fit(r);target=r;renderCrumbs(t)}
+function bbox(t){const q=t.geom;return{x:q.cx-q.rx,y:q.cy-q.ry,w:q.rx*2,h:q.ry*2}}
+function focus(t){let r=bbox(t),pad=.28;r={x:r.x-r.w*pad,y:r.y-r.h*pad,w:r.w*(1+2*pad),h:r.h*(1+2*pad)};fit(r);target=r;renderCrumbs(t)}
 function home(){target={...world};fit(target);crumbs.innerHTML=''}
 document.getElementById('home').onclick=home;
 function renderCrumbs(t){let arr=[];while(t&&t.id!=='__life'){arr.unshift(t);t=byId.get(String(t.parentId))}crumbs.innerHTML='';for(const x of arr){let s=document.createElement('span');s.className='crumb';s.textContent=x.canonicalName;s.onclick=()=>focus(x);crumbs.appendChild(s)}}
 function norm(s){return String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')}
 document.getElementById('search').onkeydown=e=>{if(e.key!=='Enter')return;let q=norm(e.target.value),hit=taxa.find(t=>norm(t.canonicalName)===q)||taxa.find(t=>norm(t.canonicalName).includes(q));if(hit)focus(hit)}
-svg.addEventListener('wheel',e=>{e.preventDefault();let rect=svg.getBoundingClientRect(),px=(e.clientX-rect.left)/rect.width,py=(e.clientY-rect.top)/rect.height,wx=target.x+px*target.w,wy=target.y+py*target.h,f=Math.exp(e.deltaY*.0012);target.w=Math.max(35,Math.min(3000,target.w*f));target.h=Math.max(22,Math.min(1900,target.h*f));target.x=wx-px*target.w;target.y=wy-py*target.h},{passive:false});
+
+function semantic(z){
+  if(Math.abs(z-lastSemantic)<.09)return;lastSemantic=z;
+  let deepest=0;
+  for(const o of elems){
+    const visible=z>=+o.p.dataset.minz;
+    o.p.classList.toggle('hidden',!visible);
+    if(visible)deepest=Math.max(deepest,o.t.depth||0);
+    const screenW=o.t.geom.rx*2*z;
+    const labelVisible=visible && z>=+o.text.dataset.minz && screenW>72;
+    o.text.classList.toggle('hidden',!labelVisible);
+    if(labelVisible){
+      const fs=Math.max(8,Math.min(21,9+Math.sqrt(Math.max(20,screenW))/5));
+      o.text.setAttribute('font-size',fs/z);
+    }
+  }
+  const names=['rijk/domein','stam','klasse','orde','familie','genus','soort'];
+  levelEl.textContent=names[Math.min(names.length-1,Math.max(0,deepest))]||'wereld';
+}
+svg.addEventListener('wheel',e=>{e.preventDefault();let r=svg.getBoundingClientRect(),px=(e.clientX-r.left)/r.width,py=(e.clientY-r.top)/r.height,wx=target.x+px*target.w,wy=target.y+py*target.h,f=Math.exp(e.deltaY*.0012);target.w=Math.max(24,Math.min(3000,target.w*f));target.h=Math.max(15,Math.min(1900,target.h*f));target.x=wx-px*target.w;target.y=wy-py*target.h},{passive:false});
 svg.onpointerdown=e=>{svg.setPointerCapture?.(e.pointerId);ptr.set(e.pointerId,{x:e.clientX,y:e.clientY});if(ptr.size===1){drag=true;last={x:e.clientX,y:e.clientY}}if(ptr.size===2){let p=[...ptr.values()];pinch={d:Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y),v:{...target},cx:(p[0].x+p[1].x)/2,cy:(p[0].y+p[1].y)/2};drag=false}};
-svg.onpointermove=e=>{if(!ptr.has(e.pointerId))return;ptr.set(e.pointerId,{x:e.clientX,y:e.clientY});if(ptr.size===2&&pinch){let p=[...ptr.values()],d=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y),sc=pinch.d/d,rect=svg.getBoundingClientRect(),px=(pinch.cx-rect.left)/rect.width,py=(pinch.cy-rect.top)/rect.height,wx=pinch.v.x+px*pinch.v.w,wy=pinch.v.y+py*pinch.v.h;target.w=Math.max(35,Math.min(3000,pinch.v.w*sc));target.h=Math.max(22,Math.min(1900,pinch.v.h*sc));target.x=wx-px*target.w;target.y=wy-py*target.h}else if(drag){let dx=e.clientX-last.x,dy=e.clientY-last.y;target.x-=dx/innerWidth*target.w;target.y-=dy/innerHeight*target.h;last={x:e.clientX,y:e.clientY}}};
+svg.onpointermove=e=>{if(!ptr.has(e.pointerId))return;ptr.set(e.pointerId,{x:e.clientX,y:e.clientY});if(ptr.size===2&&pinch){let p=[...ptr.values()],d=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y),sc=pinch.d/d,r=svg.getBoundingClientRect(),px=(pinch.cx-r.left)/r.width,py=(pinch.cy-r.top)/r.height,wx=pinch.v.x+px*pinch.v.w,wy=pinch.v.y+py*pinch.v.h;target.w=Math.max(24,Math.min(3000,pinch.v.w*sc));target.h=Math.max(15,Math.min(1900,pinch.v.h*sc));target.x=wx-px*target.w;target.y=wy-py*target.h}else if(drag){let dx=e.clientX-last.x,dy=e.clientY-last.y;target.x-=dx/innerWidth*target.w;target.y-=dy/innerHeight*target.h;last={x:e.clientX,y:e.clientY}}};
 function end(e){ptr.delete(e.pointerId);if(ptr.size<2)pinch=null;if(!ptr.size){drag=false;last=null}}svg.onpointerup=end;svg.onpointercancel=end;
-function anim(){let k=.16;view.x+=(target.x-view.x)*k;view.y+=(target.y-view.y)*k;view.w+=(target.w-view.w)*k;view.h+=(target.h-view.h)*k;svg.setAttribute('viewBox',`${view.x} ${view.y} ${view.w} ${view.h}`);zoomEl.textContent=(2400/view.w).toFixed(2)+'×';requestAnimationFrame(anim)}requestAnimationFrame(anim);
-status.textContent=`${payload.meta.taxa||taxa.length} taxa · ${payload.meta.source}`;
+
+function anim(){let k=.16;view.x+=(target.x-view.x)*k;view.y+=(target.y-view.y)*k;view.w+=(target.w-view.w)*k;view.h+=(target.h-view.h)*k;svg.setAttribute('viewBox',`${view.x} ${view.y} ${view.w} ${view.h}`);let z=2400/view.w;zoomEl.textContent=z.toFixed(2)+'×';semantic(z);requestAnimationFrame(anim)}
+status.textContent=`${payload.meta.taxa||taxa.length} taxa · ${payload.meta.roots?payload.meta.roots.map(r=>r.name).join(' · '):payload.meta.source}`;
+home();requestAnimationFrame(anim);
 })();
 </script></body></html>
