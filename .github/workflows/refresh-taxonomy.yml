@@ -30,7 +30,7 @@ jobs:
 
       - name: Generate bounded COL XR taxonomy
 
-        run: python generator/generate.py
+        run: python -u generator/generate.py
 
       - name: Commit refreshed taxonomy
 
