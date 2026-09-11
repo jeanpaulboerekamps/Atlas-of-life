@@ -1,0 +1,34 @@
+{
+  "taxonomy": {
+    "provider": "GBIF Species API / Catalogue of Life eXtended Release",
+    "datasetKey": "7ddf754f-d193-4cc9-b351-99906754a03b",
+    "apiBase": "https://api.gbif.org/v1",
+    "roots": [
+      "Animalia",
+      "Plantae",
+      "Fungi",
+      "Bacteria"
+    ]
+  },
+  "limits": {
+    "maxDepth": 6,
+    "maxTaxa": 2500,
+    "maxChildrenPerTaxon": 24
+  },
+  "weights": {
+    "base": 1.0,
+    "descendantExponent": 0.42,
+    "minWeight": 0.35,
+    "iconBoosts": {
+      "Aptenodytes forsteri": 18,
+      "Panthera leo": 16,
+      "Panthera tigris": 16,
+      "Ursus maritimus": 14,
+      "Vanessa atalanta": 10,
+      "Papilio machaon": 11,
+      "Quercus robur": 10,
+      "Amanita muscaria": 12,
+      "Escherichia coli": 8
+    }
+  }
+}
