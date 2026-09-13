@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — hierarchical wild continents v28</title>
+<title>Atlas of Life — taxonomische kleurtrappen v29</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -11,10 +11,9 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--sea);
 svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-select:none;-webkit-user-select:none}
 .sea{fill:url(#oceanGradient)}
 .grid{fill:none;stroke:#d7f4fb;stroke-width:2;opacity:.10;vector-effect:non-scaling-stroke}
-.taxonPath{cursor:pointer;stroke:#fffdf2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke;transition:opacity .18s,filter .12s;filter:drop-shadow(0 1px 2px #075b7d35)}
+.taxonPath{cursor:pointer;stroke:#171512;stroke-opacity:.82;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke;transition:opacity .18s,filter .12s;filter:drop-shadow(0 1px 1px #052b3a20)}
 .taxonPath:hover{filter:brightness(1.045)}
-.continentHaloWide{fill:none;stroke:#9de8f7;stroke-opacity:.30;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
-.continentHaloNear{fill:none;stroke:#fff5c7;stroke-opacity:.82;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
+.continentHaloWide,.continentHaloNear{display:none}
 .label{font-weight:760;fill:#18372f;pointer-events:none;paint-order:stroke;stroke:#fffdf8e8;stroke-width:2.4px;stroke-linejoin:round}
 .hidden{opacity:0;pointer-events:none}
 .top{position:absolute;left:16px;right:16px;top:14px;display:flex;gap:10px;align-items:center;pointer-events:none}
@@ -60,7 +59,7 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 <g id="halos"></g><g id="regions"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v28 · 70% continenten · orden 50%</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v29 · kleur per niveau · orden 50%</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -95,11 +94,12 @@ function hash(s){let h=2166136261;for(const c of String(s)){h^=c.charCodeAt(0);h
 function h2(s,k=0){return hash(String(s)+'|'+k)}
 function weight(t){return Math.max(.0001,+t.mapWeight||+t.weight||1)}
 
-const rootPalette={
-  Animalia:'#d84b55',
-  Plantae:'#3cab62',
-  Fungi:'#8354c5',
-  Bacteria:'#d69b45'
+const levelPalettes={
+  /* rijk, stam, klasse, orde, familie, geslacht, soort */
+  Animalia:['#78182b','#94202e','#ae2b30','#c83b2f','#df522d','#ee722d','#f39a38'],
+  Plantae:['#075d3b','#08753d','#188a3b','#3ca03a','#68b536','#9cc936','#d5d944'],
+  Fungi:['#3f205d','#522675','#652d8c','#7937a3','#9044b8','#aa57ca','#c875dc'],
+  Bacteria:['#725126','#8d6429','#a9782c','#c18c30','#d79f35','#e6b54a','#f0cb69']
 };
 const rankFallback={DOMAIN:'#89abc0',KINGDOM:'#8fb9d4',PHYLUM:'#98c4ad',CLASS:'#acd19e',ORDER:'#cbd993',FAMILY:'#bdd7ad',GENUS:'#d0dfbd',SPECIES:'#e1ead8',ROOT:'#eef3eb'};
 
@@ -120,39 +120,11 @@ function rootAncestor(t){
 function colorFor(t){
   const root=rootAncestor(t);
   const rootName=root?.canonicalName;
-  let base=rootPalette[rootName]||rankFallback[(t.rank||'').toUpperCase()]||'#a9cdb9';
-
-  const d=Math.max(0,t.depth||0);
   const r=(t.rank||'').toUpperCase();
-
-  /* Explicit colour families make ancestry readable at a glance. */
-  let f=.015+.025*d+.075*h2(t.id,50);
-
-  if(rootName==='Animalia'){
-    const hue=h2(t.id,8100);
-    if(hue>.78) base='#ef796f';
-    else if(hue>.56) base='#db3f4e';
-    else if(hue>.34) base='#bd3153';
-    else if(hue>.14) base='#e85b5f';
-    else base='#a92e48';
-  }else if(rootName==='Plantae'){
-    const hue=h2(t.id,8200);
-    if(hue>.78) base='#8fcf48';
-    else if(hue>.55) base='#55b947';
-    else if(hue>.30) base='#26985c';
-    else base='#77c75a';
-  }else if(rootName==='Fungi'){
-    const hue=h2(t.id,8300);
-    if(hue>.72) base='#b56bce';
-    else if(hue>.45) base='#8d55c7';
-    else if(hue>.20) base='#6e49ad';
-    else base='#a044a8';
-  }else if(rootName==='Bacteria'){
-    const hue=h2(t.id,8400);
-    if(hue>.62) base='#e1ad4d';
-    else if(hue<.25) base='#ba7835';
-  }
-  return tint(base,Math.min(.22,f));
+  const level={DOMAIN:0,KINGDOM:0,PHYLUM:1,CLASS:2,ORDER:3,FAMILY:4,GENUS:5,SPECIES:6}[r];
+  const palette=levelPalettes[rootName];
+  if(palette&&level!==undefined)return palette[level];
+  return rankFallback[r]||'#a9cdb9';
 }
 
 function polygonArea(poly){let a=0;for(let i=0;i<poly.length;i++){const p=poly[i],q=poly[(i+1)%poly.length];a+=p.x*q.y-q.x*p.y}return a/2}
@@ -1363,7 +1335,7 @@ const elems=[];
     const haloNear=document.createElementNS(NS,'path');
     haloNear.setAttribute('d',pathFromPoly(t.poly));haloNear.setAttribute('class','continentHaloNear');haloNear.setAttribute('stroke-width','12');hg.appendChild(haloNear);
   }
-  const p=document.createElementNS(NS,'path');p.setAttribute('d',pathFromPoly(t.poly));p.setAttribute('fill',colorFor(t));p.setAttribute('fill-opacity',String(.92+.07*h2(t.id,11100)));p.setAttribute('class','taxonPath');p.setAttribute('filter','url(#landTexture)');p.setAttribute('stroke-width',Math.max(.85,5.5-(t.depth||0)*.58));p.dataset.minz=minZoom(t);p.dataset.id=t.id;p.onclick=e=>{e.stopPropagation();focus(t)};rg.appendChild(p);
+  const p=document.createElementNS(NS,'path');p.setAttribute('d',pathFromPoly(t.poly));p.setAttribute('fill',colorFor(t));p.setAttribute('fill-opacity','.97');p.setAttribute('class','taxonPath');p.setAttribute('filter','url(#landTexture)');p.setAttribute('stroke-width','1.35');p.dataset.minz=minZoom(t);p.dataset.id=t.id;p.onclick=e=>{e.stopPropagation();focus(t)};rg.appendChild(p);
   const text=document.createElementNS(NS,'text');text.setAttribute('x',t.center.x);text.setAttribute('y',t.center.y);text.setAttribute('text-anchor','middle');text.setAttribute('class','label');text.textContent=t.vernacularName||t.canonicalName;text.dataset.minz=(minZoom(t)*1.02);text.dataset.id=t.id;lg.appendChild(text);
   elems.push({t,p,text})
 });
@@ -1403,7 +1375,7 @@ function anim(){let k=.16;view.x+=(target.x-view.x)*k;view.y+=(target.y-view.y)*
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
   status.textContent=`${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v28 · kingdoms/phyla/classes 70% land · orders 50% land · world land fraction',payload.meta.worldLandFraction);
+console.log('Atlas v29 · taxonomic level palettes · kingdoms/phyla/classes 70% land · orders 50% land',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
