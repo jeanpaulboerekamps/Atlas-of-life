@@ -51,7 +51,7 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 <g id="halos"></g><g id="regions"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>archipelkaart · iNaturalist-gewogen taxonomie</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>organische atlas · iNaturalist-gewogen taxonomie</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -87,10 +87,10 @@ function h2(s,k=0){return hash(String(s)+'|'+k)}
 function weight(t){return Math.max(.0001,+t.mapWeight||+t.weight||1)}
 
 const rootPalette={
-  Animalia:'#56c69a',
-  Plantae:'#69bf68',
-  Fungi:'#9b88cf',
-  Bacteria:'#709ed9'
+  Animalia:'#49bf98',
+  Plantae:'#63bf63',
+  Fungi:'#9a82cf',
+  Bacteria:'#638fd4'
 };
 const rankFallback={DOMAIN:'#89abc0',KINGDOM:'#8fb9d4',PHYLUM:'#98c4ad',CLASS:'#acd19e',ORDER:'#cbd993',FAMILY:'#bdd7ad',GENUS:'#d0dfbd',SPECIES:'#e1ead8',ROOT:'#eef3eb'};
 
@@ -110,10 +110,11 @@ function rootAncestor(t){
 }
 function colorFor(t){
   const root=rootAncestor(t);
-  const base=rootPalette[root?.canonicalName]||rankFallback[(t.rank||'').toUpperCase()]||'#a9cdb9';
+  const rootName=root?.canonicalName;
+  const base=rootPalette[rootName]||rankFallback[(t.rank||'').toUpperCase()]||'#a9cdb9';
   const d=Math.max(0,t.depth||0);
-  const variation=.03+.055*d+.16*h2(t.id,50);
-  return tint(base,Math.min(.48,variation));
+  const light=.035+.040*d+.12*h2(t.id,50);
+  return tint(base,Math.min(.36,light));
 }
 
 function polygonArea(poly){let a=0;for(let i=0;i<poly.length;i++){const p=poly[i],q=poly[(i+1)%poly.length];a+=p.x*q.y-q.x*p.y}return a/2}
@@ -122,254 +123,186 @@ function polygonCentroid(poly){let a=polygonArea(poly),cx=0,cy=0;if(Math.abs(a)<
 function polyBBox(poly){let xs=poly.map(p=>p.x),ys=poly.map(p=>p.y);let x=Math.min(...xs),X=Math.max(...xs),y=Math.min(...ys),Y=Math.max(...ys);return{x,y,w:X-x,h:Y-y}}
 function cleanPoly(poly){const out=[];for(const p of poly){const q=out[out.length-1];if(!q||Math.hypot(p.x-q.x,p.y-q.y)>.001)out.push({x:p.x,y:p.y})}if(out.length>2&&Math.hypot(out[0].x-out[out.length-1].x,out[0].y-out[out.length-1].y)<.001)out.pop();return out}
 
-function clipHalf(poly,axis,cut,keepLow){
-  const val=p=>axis==='x'?p.x:p.y,inside=p=>keepLow?val(p)<=cut+1e-7:val(p)>=cut-1e-7,out=[];
-  for(let i=0;i<poly.length;i++){
-    const a=poly[i],b=poly[(i+1)%poly.length],ia=inside(a),ib=inside(b);
-    if(ia)out.push({x:a.x,y:a.y});
-    if(ia!==ib){const va=val(a),vb=val(b),t=(cut-va)/(vb-va);out.push({x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t})}
+
+function pointInPoly(p,poly){
+  let inside=false;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const a=poly[i],b=poly[j];
+    const hit=((a.y>p.y)!=(b.y>p.y)) &&
+      (p.x < (b.x-a.x)*(p.y-a.y)/(b.y-a.y+1e-12)+a.x);
+    if(hit)inside=!inside;
   }
-  return cleanPoly(out)
+  return inside;
 }
-function cutForFraction(poly,axis,fraction){
-  const b=polyBBox(poly);let lo=axis==='x'?b.x:b.y,hi=axis==='x'?b.x+b.w:b.y+b.h;
-  const total=absArea(poly),target=total*fraction;
-  for(let i=0;i<42;i++){const mid=(lo+hi)/2,low=clipHalf(poly,axis,mid,true),a=low.length>=3?absArea(low):0;if(a<target)lo=mid;else hi=mid}
-  return(lo+hi)/2
-}
-function cutVertices(poly,axis,cut){return poly.filter(p=>Math.abs((axis==='x'?p.x:p.y)-cut)<.04)}
-function farthestPair(points){if(points.length<2)return null;let best=null,dmax=-1;for(let i=0;i<points.length;i++)for(let j=i+1;j<points.length;j++){let d=(points[i].x-points[j].x)**2+(points[i].y-points[j].y)**2;if(d>dmax){dmax=d;best=[points[i],points[j]]}}return best}
-function wavyDivider(a,b,axis,seed,parentBox,depth){
-  const pts=[],N=10,len=Math.hypot(b.x-a.x,b.y-a.y);
-  const baseAmp=Math.min(len*(depth<2?.105:.078),Math.min(parentBox.w,parentBox.h)*(depth<2?.072:.052));
-  const amp=baseAmp*(.7+.5*h2(seed,771)),phase=2*Math.PI*h2(seed,772),second=.28+.25*h2(seed,773);
-  for(let i=0;i<=N;i++){
-    const t=i/N,envelope=Math.sin(Math.PI*t);
-    const off=amp*envelope*(Math.sin(2*Math.PI*t+phase)*.72+Math.sin(4*Math.PI*t-phase*.7)*second);
-    let x=a.x+(b.x-a.x)*t,y=a.y+(b.y-a.y)*t;if(axis==='x')x+=off;else y+=off;pts.push({x,y})
+
+function organicBlob(cx,cy,rx,ry,id,detail=30){
+  const pts=[];
+  const phase=2*Math.PI*h2(id,7001);
+  for(let i=0;i<detail;i++){
+    const a=2*Math.PI*i/detail;
+    /* Always <= 1, so the blob stays inside its collision ellipse. */
+    let q=.87
+      +.060*Math.sin(3*a+phase)
+      +.035*Math.sin(5*a-phase*.6)
+      +.024*Math.sin(8*a+phase*1.7)
+      +.030*(h2(id,7100+i)-.5);
+    q=Math.max(.72,Math.min(.985,q));
+    pts.push({x:cx+Math.cos(a)*rx*q,y:cy+Math.sin(a)*ry*q});
   }
-  return pts
-}
-function replaceDivider(poly,axis,cut,wave){
-  if(poly.length<3)return poly;const on=p=>Math.abs((axis==='x'?p.x:p.y)-cut)<.08;let edge=-1;
-  for(let i=0;i<poly.length;i++){if(on(poly[i])&&on(poly[(i+1)%poly.length])){edge=i;break}}
-  if(edge<0)return poly;
-  const a=poly[edge],b=poly[(edge+1)%poly.length];
-  const direct=Math.hypot(a.x-wave[0].x,a.y-wave[0].y)+Math.hypot(b.x-wave[wave.length-1].x,b.y-wave[wave.length-1].y);
-  const reverse=Math.hypot(a.x-wave[wave.length-1].x,a.y-wave[wave.length-1].y)+Math.hypot(b.x-wave[0].x,b.y-wave[0].y);
-  const seq=(direct<=reverse?wave:[...wave].reverse()).map(p=>({x:p.x,y:p.y})),out=[];
-  for(let i=0;i<poly.length;i++){out.push({x:poly[i].x,y:poly[i].y});if(i===edge){for(let k=1;k<seq.length-1;k++)out.push(seq[k])}}
-  return cleanPoly(out)
-}
-function splitItems(items){
-  if(items.length<=1)return[items,[]];
-  const sorted=[...items].sort((a,b)=>weight(b)-weight(a)),A=[],B=[];let wa=0,wb=0;
-  for(const x of sorted){if(wa<=wb){A.push(x);wa+=weight(x)}else{B.push(x);wb+=weight(x)}}
-  if(!A.length||!B.length){const m=Math.ceil(sorted.length/2);return[sorted.slice(0,m),sorted.slice(m)]}
-  return[A,B]
+  return cleanPoly(pts);
 }
 
-function organicInset(poly,t,depth){
-  if(!poly||poly.length<3)return poly;
-
-  const c=polygonCentroid(poly);
-  const b=polyBBox(poly);
-  const rank=(t?.rank||'').toUpperCase();
-
-  /* Higher levels get broader seas and more dramatic coastlines.
-     Lower levels keep smaller margins so tiny taxa remain usable. */
-  const gapByRank={
-    DOMAIN:.090,KINGDOM:.090,PHYLUM:.078,CLASS:.066,
-    ORDER:.056,FAMILY:.046,GENUS:.038,SPECIES:.031
-  };
-  const baseGap=gapByRank[rank] ?? Math.max(.030,.082-depth*.007);
-
-  /* First make the original vertices irregular: some become capes
-     (small inset), others retreat strongly and become bays. All movement
-     is toward the centroid, so the new coast remains inside its ownership cell. */
-  const anchors=poly.map((p,i)=>{
-    const cape=h2(t?.id||'root',2000+i);
-    const bay=h2(t?.id||'root',2300+i);
-    let factor;
-
-    if(cape>.79){
-      factor=baseGap*(.22+.28*h2(t?.id||'root',2500+i));   // cape
-    }else if(bay>.66){
-      factor=baseGap*(1.45+.95*h2(t?.id||'root',2700+i));  // deep bay
-    }else{
-      factor=baseGap*(.65+.85*h2(t?.id||'root',2900+i));
-    }
-
-    /* Keep very small polygons from collapsing. */
-    factor=Math.min(.30,Math.max(.008,factor));
-    return {
-      x:p.x+(c.x-p.x)*factor,
-      y:p.y+(c.y-p.y)*factor
-    };
-  });
-
-  const out=[];
-
-  /* Insert several points per edge. Each inserted point independently becomes
-     either a shallow headland or a deep indentation. This gives a much more
-     Earth-like coastline while never pushing outside the partition cell. */
-  for(let i=0;i<anchors.length;i++){
-    const a=anchors[i],z=anchors[(i+1)%anchors.length];
-    out.push(a);
-
-    const edgeLen=Math.hypot(z.x-a.x,z.y-a.y);
-    const localScale=Math.max(24,Math.min(b.w,b.h));
-
-    /* Long edges get more coastline detail. */
-    const extra=Math.max(
-      1,
-      Math.min(7,Math.floor(edgeLen/Math.max(42,localScale*.14)))
-    );
-
-    for(let k=1;k<=extra;k++){
-      const u=k/(extra+1);
-
-      let x=a.x+(z.x-a.x)*u;
-      let y=a.y+(z.y-a.y)*u;
-
-      const r1=h2(t?.id||'root',3200+i*31+k);
-      const r2=h2(t?.id||'root',3600+i*37+k);
-      const r3=h2(t?.id||'root',4000+i*41+k);
-
-      /* Multiple scales: ordinary roughness, occasional fjord, occasional cape. */
-      let pull;
-      if(r1>.86){
-        pull=(.070+.095*r2)*localScale;       // pronounced bay / fjord
-      }else if(r1<.16){
-        pull=(.004+.010*r2)*localScale;       // headland
-      }else{
-        pull=(.018+.050*r2)*localScale;       // normal rugged coast
-      }
-
-      /* Add a little tangential wandering as well, but keep it modest. */
-      const ex=z.x-a.x,ey=z.y-a.y,elen=Math.hypot(ex,ey)||1;
-      const tx=ex/elen,ty=ey/elen;
-      const wander=(r3-.5)*Math.min(edgeLen*.10,localScale*.055);
-
-      x+=tx*wander;
-      y+=ty*wander;
-
-      /* Crucially, the major displacement is only inward. */
-      const dx=c.x-x,dy=c.y-y,d=Math.hypot(dx,dy)||1;
-      x+=dx/d*pull;
-      y+=dy/d*pull;
-
-      out.push({x,y});
-    }
-  }
-
-  /* A second deterministic erosion pass exaggerates a subset of bays.
-     Again: inward only, so no sibling overlap can be introduced here. */
-  const eroded=out.map((p,i)=>{
-    const r=h2(t?.id||'root',5000+i);
-    if(r<.74)return p;
-
-    const amount=(.010+.035*h2(t?.id||'root',5400+i))*Math.min(b.w,b.h);
-    const dx=c.x-p.x,dy=c.y-p.y,d=Math.hypot(dx,dy)||1;
-
-    return {
-      x:p.x+dx/d*amount,
-      y:p.y+dy/d*amount
-    };
-  });
-
-  return cleanPoly(eroded);
-}
-
-function partition(poly,items,depth,parentId){
-  if(!items.length)return;
-  if(items.length===1){
-    const t=items[0];t.cellPoly=poly;t.depth=depth;t.poly=organicInset(poly,t,depth);
-    const cs=children.get(String(t.id))||[];if(cs.length)partition(t.poly,cs,depth+1,String(t.id));return
-  }
-  const [A,B]=splitItems(items),wA=A.reduce((s,x)=>s+weight(x),0),wB=B.reduce((s,x)=>s+weight(x),0),fraction=wA/(wA+wB),box=polyBBox(poly);
-  let axis;if(box.w>box.h*1.2)axis='x';else if(box.h>box.w*1.2)axis='y';else axis=h2(parentId,depth*43+A.length*7)>.5?'x':'y';
-  let cut=cutForFraction(poly,axis,fraction),pA=clipHalf(poly,axis,cut,true),pB=clipHalf(poly,axis,cut,false);
-  if(pA.length<3||pB.length<3){axis=axis==='x'?'y':'x';cut=cutForFraction(poly,axis,fraction);pA=clipHalf(poly,axis,cut,true);pB=clipHalf(poly,axis,cut,false)}
-  if(pA.length>=3&&pB.length>=3){
-    const pair=farthestPair(cutVertices(pA,axis,cut));
-    if(pair){const wave=wavyDivider(pair[0],pair[1],axis,parentId+'|'+depth+'|'+A[0].id,box,depth);pA=replaceDivider(pA,axis,cut,wave);pB=replaceDivider(pB,axis,cut,wave)}
-  }
-  partition(pA,A,depth,parentId+'L');partition(pB,B,depth,parentId+'R')
-}
-
-/* V14: the four main roots become separate continents in fixed, non-overlapping
-   anchor zones. Their polygon areas still follow mapWeight; the rest of the
-   rectangle remains true open ocean. */
-function blobInBox(box,id,targetArea){
-  const cx=box.x+box.w/2,cy=box.y+box.h/2;
-  const n=42,unit=[];
-  const phase=2*Math.PI*h2(id,6100);
+function ellipseFits(poly,x,y,rx,ry){
+  if(!pointInPoly({x,y},poly))return false;
+  const n=18;
   for(let i=0;i<n;i++){
     const a=2*Math.PI*i/n;
-    /* Layer several deterministic harmonics: this creates broad bays and capes,
-       not merely a noisy ellipse. */
-    let r=1
-      +.115*Math.sin(3*a+phase)
-      +.075*Math.sin(5*a-phase*.7)
-      +.045*Math.sin(9*a+phase*1.3)
-      +.065*(h2(id,6200+i)-.5);
-    r=Math.max(.72,Math.min(1.18,r));
-    unit.push({
-      x:Math.cos(a)*r,
-      y:Math.sin(a)*r*(.90+.18*Math.sin(2*a+phase*.4))
-    });
+    if(!pointInPoly({x:x+Math.cos(a)*rx,y:y+Math.sin(a)*ry},poly))return false;
+  }
+  return true;
+}
+
+function nudgeInside(poly,item,center){
+  let tries=0;
+  while(tries++<35 && !ellipseFits(poly,item.x,item.y,item.rx,item.ry)){
+    item.x=item.x*.90+center.x*.10;
+    item.y=item.y*.90+center.y*.10;
+    if(tries%6===0){
+      item.rx*=.94;item.ry*=.94;item.bound=Math.max(item.rx,item.ry);
+    }
+  }
+}
+
+function resolveCollisions(items,parentPoly,parentCenter){
+  for(let pass=0;pass<145;pass++){
+    for(let i=0;i<items.length;i++){
+      const a=items[i];
+      let fx=(parentCenter.x-a.x)*.0016,fy=(parentCenter.y-a.y)*.0016;
+      for(let j=0;j<items.length;j++)if(i!==j){
+        const b=items[j],dx=a.x-b.x,dy=a.y-b.y;
+        const d=Math.hypot(dx,dy)||.001;
+        const min=(a.bound+b.bound)*1.055;
+        if(d<min){
+          const push=(min-d)*.17;
+          fx+=dx/d*push;fy+=dy/d*push;
+        }
+      }
+      a.x+=fx;a.y+=fy;
+      if(pass%4===0)nudgeInside(parentPoly,a,parentCenter);
+    }
   }
 
-  /* Start with the largest safe shape for this anchor. */
-  const rx=box.w*.47,ry=box.h*.47;
-  let poly=unit.map(p=>({x:cx+p.x*rx,y:cy+p.y*ry}));
-  const a0=Math.max(1,absArea(poly));
-  let scale=Math.sqrt(Math.max(1,targetArea)/a0);
-  scale=Math.min(1,Math.max(.24,scale));
-  poly=poly.map(p=>({x:cx+(p.x-cx)*scale,y:cy+(p.y-cy)*scale}));
+  /* Final safety pass: shrink only stubborn conflicts. */
+  for(let k=0;k<10;k++){
+    let changed=false;
+    for(let i=0;i<items.length;i++)for(let j=i+1;j<items.length;j++){
+      const a=items[i],b=items[j],d=Math.hypot(a.x-b.x,a.y-b.y);
+      if(d<(a.bound+b.bound)*1.015){
+        a.rx*=.965;a.ry*=.965;a.bound=Math.max(a.rx,a.ry);
+        b.rx*=.965;b.ry*=.965;b.bound=Math.max(b.rx,b.ry);
+        changed=true;
+      }
+    }
+    for(const a of items)nudgeInside(parentPoly,a,parentCenter);
+    if(!changed)break;
+  }
+}
 
-  /* One inward erosion pass adds fjords while guaranteeing the continent
-     remains in its own anchor zone. */
-  const c=polygonCentroid(poly),b=polyBBox(poly);
-  poly=poly.map((p,i)=>{
-    const bay=h2(id,6500+i);
-    const pull=(bay>.76?.040+.050*h2(id,6800+i):.004+.014*h2(id,6900+i))*Math.min(b.w,b.h);
-    const dx=c.x-p.x,dy=c.y-p.y,d=Math.hypot(dx,dy)||1;
-    return{x:p.x+dx/d*pull,y:p.y+dy/d*pull};
+function packChildren(parentPoly,items,depth,parentId){
+  if(!items.length)return;
+  const area=absArea(parentPoly),box=polyBBox(parentPoly),center=polygonCentroid(parentPoly);
+  const total=items.reduce((s,t)=>s+weight(t),0);
+
+  /* Deliberately leave open space, like seas/lakes between taxonomic regions. */
+  const fillRatio=depth<=1?.59:depth===2?.66:depth===3?.72:.76;
+  const usable=Math.max(1,area*fillRatio);
+
+  const packed=items.map((t,i)=>{
+    const share=weight(t)/total;
+    const equivalent=Math.sqrt(usable*share/Math.PI);
+    const asp=.88+.24*h2(t.id,7201);
+    const rx=equivalent*Math.sqrt(asp);
+    const ry=equivalent/Math.sqrt(asp);
+    const ang=i*2.3999632297+2*Math.PI*h2(parentId,7300+i);
+    const radial=.29*Math.min(box.w,box.h)*Math.sqrt((i+.65)/(items.length+.5));
+    return{
+      t,rx,ry,bound:Math.max(rx,ry),
+      x:center.x+Math.cos(ang)*radial,
+      y:center.y+Math.sin(ang)*radial
+    };
   });
-  return cleanPoly(poly);
+
+  /* If the first guess is too ambitious, shrink the complete family until it fits. */
+  for(let round=0;round<8;round++){
+    for(const p of packed)nudgeInside(parentPoly,p,center);
+    resolveCollisions(packed,parentPoly,center);
+    let bad=false;
+    for(let i=0;i<packed.length;i++){
+      if(!ellipseFits(parentPoly,packed[i].x,packed[i].y,packed[i].rx,packed[i].ry)){bad=true;break}
+      for(let j=i+1;j<packed.length;j++){
+        if(Math.hypot(packed[i].x-packed[j].x,packed[i].y-packed[j].y) <
+           (packed[i].bound+packed[j].bound)*1.005){bad=true;break}
+      }
+      if(bad)break;
+    }
+    if(!bad)break;
+    for(const p of packed){
+      p.rx*=.92;p.ry*=.92;p.bound=Math.max(p.rx,p.ry);
+      p.x=p.x*.94+center.x*.06;p.y=p.y*.94+center.y*.06;
+    }
+  }
+
+  for(const p of packed){
+    const t=p.t;
+    t.depth=depth;
+    t.poly=organicBlob(p.x,p.y,p.rx,p.ry,t.id,depth<2?36:28);
+    t.cellPoly=t.poly;
+    const cs=children.get(String(t.id))||[];
+    if(cs.length)packChildren(t.poly,cs,depth+1,String(t.id));
+  }
+}
+
+function rootContinent(box,t,targetArea){
+  const cx=box.x+box.w/2,cy=box.y+box.h/2;
+  /* Make the aspect ratio follow the anchor box while keeping area close to target. */
+  const aspect=box.w/box.h;
+  let rx=Math.sqrt(targetArea*aspect/Math.PI);
+  let ry=Math.sqrt(targetArea/(aspect*Math.PI));
+  const maxRx=box.w*.48,maxRy=box.h*.48;
+  const s=Math.min(1,maxRx/rx,maxRy/ry);
+  rx*=s;ry*=s;
+  return organicBlob(cx,cy,rx,ry,t.id,46);
 }
 
 function layoutRootContinents(){
   const top=children.get(String(roots[0].id))||[];
   if(!top.length)return;
 
+  /* Positions deliberately mirror the visual sketch. */
   const anchors={
-    Plantae:{x:28,y:80,w:790,h:720},
-    Animalia:{x:760,y:65,w:1580,h:930},
-    Fungi:{x:28,y:830,w:790,h:625},
-    Bacteria:{x:1580,y:1010,w:790,h:440}
+    Plantae:{x:18,y:76,w:820,h:710},
+    Animalia:{x:720,y:58,w:1640,h:950},
+    Fungi:{x:18,y:835,w:800,h:610},
+    Bacteria:{x:1590,y:1010,w:780,h:425}
   };
   const fallback=[
-    {x:40,y:80,w:760,h:650},
-    {x:820,y:80,w:1500,h:850},
-    {x:40,y:850,w:720,h:560},
-    {x:1640,y:1020,w:700,h:400}
+    {x:30,y:70,w:780,h:700},
+    {x:770,y:60,w:1560,h:900},
+    {x:30,y:850,w:740,h:560},
+    {x:1650,y:1030,w:680,h:360}
   ];
 
   const sum=top.reduce((s,t)=>s+weight(t),0);
-  const worldArea=2400*1500;
-  const landBudget=worldArea*.56;
+  const landBudget=2400*1500*.50;
 
   top.forEach((t,i)=>{
     const box=anchors[t.canonicalName]||fallback[i%fallback.length];
     const target=landBudget*(weight(t)/sum);
     t.depth=0;
-    t.poly=blobInBox(box,t.id,target);
+    t.poly=rootContinent(box,t,target);
     t.cellPoly=t.poly;
     const cs=children.get(String(t.id))||[];
-    if(cs.length)partition(t.poly,cs,1,String(t.id));
+    if(cs.length)packChildren(t.poly,cs,1,String(t.id));
   });
 }
 layoutRootContinents();
@@ -389,11 +322,11 @@ const elems=[];
   t.box=polyBBox(t.poly);t.center=polygonCentroid(t.poly);t.area=absArea(t.poly);
   if((t.depth||0)===0){
     const haloWide=document.createElementNS(NS,'path');
-    haloWide.setAttribute('d',pathFromPoly(t.poly));haloWide.setAttribute('class','continentHaloWide');haloWide.setAttribute('stroke-width','34');hg.appendChild(haloWide);
+    haloWide.setAttribute('d',pathFromPoly(t.poly));haloWide.setAttribute('class','continentHaloWide');haloWide.setAttribute('stroke-width','54');hg.appendChild(haloWide);
     const haloNear=document.createElementNS(NS,'path');
-    haloNear.setAttribute('d',pathFromPoly(t.poly));haloNear.setAttribute('class','continentHaloNear');haloNear.setAttribute('stroke-width','11');hg.appendChild(haloNear);
+    haloNear.setAttribute('d',pathFromPoly(t.poly));haloNear.setAttribute('class','continentHaloNear');haloNear.setAttribute('stroke-width','16');hg.appendChild(haloNear);
   }
-  const p=document.createElementNS(NS,'path');p.setAttribute('d',pathFromPoly(t.poly));p.setAttribute('fill',colorFor(t));p.setAttribute('class','taxonPath');p.setAttribute('stroke-width',Math.max(1,8-(t.depth||0)));p.dataset.minz=minZoom(t);p.dataset.id=t.id;p.onclick=e=>{e.stopPropagation();focus(t)};rg.appendChild(p);
+  const p=document.createElementNS(NS,'path');p.setAttribute('d',pathFromPoly(t.poly));p.setAttribute('fill',colorFor(t));p.setAttribute('class','taxonPath');p.setAttribute('stroke-width',Math.max(.9,6.5-(t.depth||0)*.72));p.dataset.minz=minZoom(t);p.dataset.id=t.id;p.onclick=e=>{e.stopPropagation();focus(t)};rg.appendChild(p);
   const text=document.createElementNS(NS,'text');text.setAttribute('x',t.center.x);text.setAttribute('y',t.center.y);text.setAttribute('text-anchor','middle');text.setAttribute('class','label');text.textContent=t.vernacularName||t.canonicalName;text.dataset.minz=(minZoom(t)*1.02);text.dataset.id=t.id;lg.appendChild(text);
   elems.push({t,p,text})
 });
@@ -423,7 +356,7 @@ svg.onpointerdown=e=>{svg.setPointerCapture?.(e.pointerId);ptr.set(e.pointerId,{
 svg.onpointermove=e=>{if(!ptr.has(e.pointerId))return;ptr.set(e.pointerId,{x:e.clientX,y:e.clientY});if(ptr.size===2&&pinch){let p=[...ptr.values()],d=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y),sc=pinch.d/d,r=svg.getBoundingClientRect(),px=(pinch.cx-r.left)/r.width,py=(pinch.cy-r.top)/r.height,wx=pinch.v.x+px*pinch.v.w,wy=pinch.v.y+py*pinch.v.h;target.w=Math.max(24,Math.min(3000,pinch.v.w*sc));target.h=Math.max(15,Math.min(1900,pinch.v.h*sc));target.x=wx-px*target.w;target.y=wy-py*target.h}else if(drag){let dx=e.clientX-last.x,dy=e.clientY-last.y;target.x-=dx/innerWidth*target.w;target.y-=dy/innerHeight*target.h;last={x:e.clientX,y:e.clientY}}};
 function end(e){ptr.delete(e.pointerId);if(ptr.size<2)pinch=null;if(!ptr.size){drag=false;last=null}}svg.onpointerup=end;svg.onpointercancel=end;
 function anim(){let k=.16;view.x+=(target.x-view.x)*k;view.y+=(target.y-view.y)*k;view.w+=(target.w-view.w)*k;view.h+=(target.h-view.h)*k;svg.setAttribute('viewBox',`${view.x} ${view.y} ${view.w} ${view.h}`);let z=2400/view.w;zoomEl.textContent=z.toFixed(2)+'×';semantic(z);requestAnimationFrame(anim)}
-status.textContent=`${payload.meta.taxa||taxa.length} taxa · archipelkaart · open oceaan · orde-oppervlakte: iNaturalist · 10× = 2× ruimte`;
+status.textContent=`${payload.meta.taxa||taxa.length} taxa · organische atlas · open oceaan · orde-oppervlakte: iNaturalist · 10× = 2× ruimte`;
 home();requestAnimationFrame(anim);
 })();
 </script></body></html>
