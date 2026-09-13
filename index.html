@@ -2,21 +2,22 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — iNaturalist weighted map v7</title>
+<title>Atlas of Life — organic partition map v11</title>
 <style>
-:root{--sea:#e6f0eb;--ink:#17372f;--panel:#fffdf9ee;--muted:#60776e}
-*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--sea);font-family:system-ui,-apple-system,sans-serif;color:var(--ink)}
-#app{position:relative;width:100%;height:100%;background:linear-gradient(145deg,#f4f6ef,#dae9e6)}
+:root{--sea:#dfece8;--ink:#17372f;--panel:#fffdf9ee;--muted:#60776e}
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--sea);font-family:system-ui,-apple-system,sans-serif;color:var(--ink)}
+#app{position:relative;width:100%;height:100%;background:linear-gradient(145deg,#f4f6ef,#d9e8e5)}
 svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-select:none;-webkit-user-select:none}
-.sea{fill:#e3efea}.grid{fill:none;stroke:#5e7e73;stroke-width:1;opacity:.09;vector-effect:non-scaling-stroke}
-.taxonPath{cursor:pointer;stroke:#fffdf8;stroke-linejoin:round;vector-effect:non-scaling-stroke;transition:opacity .18s}
+.sea{fill:#deebe7}
+.grid{fill:none;stroke:#5e7e73;stroke-width:1;opacity:.07;vector-effect:non-scaling-stroke}
+.taxonPath{cursor:pointer;stroke:#fffdf8;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke;transition:opacity .18s,filter .12s}
 .taxonPath:hover{filter:brightness(1.035)}
-.label{font-weight:750;fill:#18372f;pointer-events:none;paint-order:stroke;stroke:#fffdf8cc;stroke-width:2.4px;stroke-linejoin:round}
-.latin{font-family:Georgia,serif;font-style:italic;fill:#3f6258;pointer-events:none;paint-order:stroke;stroke:#fffdf8bb;stroke-width:1.6px}
+.label{font-weight:750;fill:#18372f;pointer-events:none;paint-order:stroke;stroke:#fffdf8dd;stroke-width:2.5px;stroke-linejoin:round}
 .hidden{opacity:0;pointer-events:none}
 .top{position:absolute;left:16px;right:16px;top:14px;display:flex;gap:10px;align-items:center;pointer-events:none}
 .card{background:var(--panel);border:1px solid #35524723;border-radius:16px;box-shadow:0 9px 30px #3552471d;backdrop-filter:blur(11px);pointer-events:auto}
-.brand{padding:10px 13px;min-width:205px}.brand b{display:block;font-size:18px}.brand small{color:var(--muted)}
+.brand{padding:10px 13px;min-width:225px}.brand b{display:block;font-size:18px}.brand small{color:var(--muted)}
 .search{flex:1;max-width:560px;padding:9px 12px}.search input{width:100%;border:0;outline:0;background:transparent;color:var(--ink);font-size:14px}
 .controls{margin-left:auto;padding:7px;display:flex;gap:7px}.controls button{border:1px solid #35524725;background:#fffdf9;color:#24463c;border-radius:10px;padding:8px 10px}
 #crumbs{position:absolute;left:16px;top:76px;display:flex;gap:5px;flex-wrap:wrap;max-width:72vw}.crumb{background:#fffdf9e9;border:1px solid #35524720;border-radius:999px;padding:5px 8px;font-size:10px;cursor:pointer}
@@ -27,154 +28,483 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 <body><div id="app">
 <svg id="map" viewBox="0 0 2400 1500">
 <rect class="sea" width="2400" height="1500"/>
-<g class="grid"><path d="M0 300 C600 245 1650 350 2400 280"/><path d="M0 730 C700 650 1700 810 2400 700"/><path d="M0 1130 C650 1060 1700 1200 2400 1090"/></g>
+<g class="grid">
+  <path d="M0 300 C600 245 1650 350 2400 280"/>
+  <path d="M0 730 C700 650 1700 810 2400 700"/>
+  <path d="M0 1130 C650 1060 1700 1200 2400 1090"/>
+</g>
 <g id="regions"></g><g id="labels"></g>
 </svg>
-<div class="top"><div class="card brand"><b>Atlas of Life</b><small>iNaturalist-gewogen taxonomische kaart</small></div>
-<div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
-<div class="card controls"><button id="home">Wereld</button></div></div>
+<div class="top">
+  <div class="card brand"><b>Atlas of Life</b><small>organische, iNaturalist-gewogen taxonomische kaart</small></div>
+  <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
+  <div class="card controls"><button id="home">Wereld</button></div>
+</div>
 <div id="crumbs"></div>
 <div id="status" class="card status">taxonomie laden…</div>
 <div id="level" class="card level">wereld</div>
 <div id="zoom" class="card zoom">1.00×</div>
 </div>
+
 <script>
 (async()=>{
 const NS='http://www.w3.org/2000/svg';
-const svg=document.getElementById('map'), rg=document.getElementById('regions'), lg=document.getElementById('labels');
-const status=document.getElementById('status'), zoomEl=document.getElementById('zoom'), levelEl=document.getElementById('level'), crumbs=document.getElementById('crumbs');
+const svg=document.getElementById('map');
+const rg=document.getElementById('regions'), lg=document.getElementById('labels');
+const status=document.getElementById('status'), zoomEl=document.getElementById('zoom');
+const levelEl=document.getElementById('level'), crumbs=document.getElementById('crumbs');
+
 const payload=await fetch('data/taxa.json',{cache:'no-store'}).then(r=>r.json());
 const taxa=payload.taxa;
 const byId=new Map(taxa.map(t=>[String(t.id),t]));
+
 let roots=taxa.filter(t=>!t.parentId||!byId.has(String(t.parentId)));
 if(roots.length>1){
-  const life={id:'__life',parentId:null,canonicalName:'Life',rank:'ROOT',weight:roots.reduce((a,t)=>a+(+t.weight||1),0),depth:-1};
-  taxa.push(life);byId.set(life.id,life);roots.forEach(t=>t.parentId=life.id);roots=[life];
+  const life={
+    id:'__life',parentId:null,canonicalName:'Life',rank:'ROOT',
+    mapWeight:roots.reduce((a,t)=>a+Math.max(.0001,+t.mapWeight||+t.weight||1),0),
+    depth:-1
+  };
+  taxa.push(life); byId.set(life.id,life);
+  roots.forEach(t=>t.parentId=life.id);
+  roots=[life];
 }
+
 const children=new Map();
-taxa.forEach(t=>{const p=String(t.parentId);if(!children.has(p))children.set(p,[]);children.get(p).push(t)});
+taxa.forEach(t=>{
+  const p=String(t.parentId);
+  if(!children.has(p))children.set(p,[]);
+  children.get(p).push(t);
+});
 
-function hash(s){let h=2166136261;for(const c of String(s)){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return(h>>>0)/4294967295}
+function hash(s){
+  let h=2166136261;
+  for(const c of String(s)){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}
+  return(h>>>0)/4294967295
+}
 function h2(s,k=0){return hash(String(s)+'|'+k)}
-const palette={DOMAIN:'#9eb9c4',KINGDOM:'#8fb9d4',PHYLUM:'#96c2ae',CLASS:'#a6cda0',ORDER:'#ccd995',FAMILY:'#bbd7ad',GENUS:'#cbdcbd',SPECIES:'#dfe9d8',ROOT:'#eef3eb'};
-function tint(hex,f){let n=parseInt(hex.slice(1),16),r=n>>16,g=(n>>8)&255,b=n&255;return`rgb(${Math.round(r+(255-r)*f)},${Math.round(g+(255-g)*f)},${Math.round(b+(255-b)*f)})`}
-function subtree(t){return Math.max(.0001,+t.mapWeight||+t.weight||1)}
+function weight(t){return Math.max(.0001,+t.mapWeight||+t.weight||1)}
 
-const world={x:0,y:0,w:2400,h:1500};
-roots[0].geom={cx:1200,cy:760,rx:1110,ry:650};
+const palette={
+  DOMAIN:'#9eb9c4',KINGDOM:'#8fb9d4',PHYLUM:'#96c2ae',CLASS:'#a6cda0',
+  ORDER:'#ccd995',FAMILY:'#bbd7ad',GENUS:'#cbdcbd',SPECIES:'#dfe9d8',ROOT:'#eef3eb'
+};
+function tint(hex,f){
+  let n=parseInt(hex.slice(1),16),r=n>>16,g=(n>>8)&255,b=n&255;
+  return`rgb(${Math.round(r+(255-r)*f)},${Math.round(g+(255-g)*f)},${Math.round(b+(255-b)*f)})`
+}
 
-// Weighted nested island packing. Siblings repel one another but remain inside
-// their parent's ellipse. This intentionally leaves "sea" between taxa.
-function pack(parent){
-  const cs=(children.get(String(parent.id))||[]).sort((a,b)=>subtree(b)-subtree(a));
-  if(!cs.length)return;
-  const pg=parent.geom,total=cs.reduce((a,c)=>a+subtree(c),0);
-  const base=Math.min(pg.rx,pg.ry);
-  const items=cs.map((c,i)=>{
-    const share=subtree(c)/total;
-    const r=Math.max(base*.045,base*Math.sqrt(share)*.72);
-    const asp=.78+.45*h2(c.id,1);
-    const angle=2.3999632297*i + h2(c.id,2)*.7;
-    const dist=base*.10*Math.sqrt(i+1);
-    return {c,rx:r*asp,ry:r/asp,x:pg.cx+Math.cos(angle)*dist,y:pg.cy+Math.sin(angle)*dist};
-  });
-  for(let it=0;it<95;it++){
-    for(let i=0;i<items.length;i++){
-      let a=items[i],fx=(pg.cx-a.x)*.012,fy=(pg.cy-a.y)*.012;
-      for(let j=0;j<items.length;j++)if(i!==j){
-        let b=items[j],dx=a.x-b.x,dy=a.y-b.y;
-        let d=Math.hypot(dx,dy)||.001;
-        let min=(Math.max(a.rx,a.ry)+Math.max(b.rx,b.ry))*.90;
-        if(d<min){let q=(min-d)/min*.72;fx+=dx/d*q*18;fy+=dy/d*q*18}
-      }
-      a.x+=fx;a.y+=fy;
-      let nx=(a.x-pg.cx)/Math.max(1,pg.rx-a.rx*1.12),ny=(a.y-pg.cy)/Math.max(1,pg.ry-a.ry*1.12);
-      let q=Math.sqrt(nx*nx+ny*ny);
-      if(q>1){a.x=pg.cx+(a.x-pg.cx)/q;a.y=pg.cy+(a.y-pg.cy)/q}
+/* ---------- polygon math ---------- */
+
+function polygonArea(poly){
+  let a=0;
+  for(let i=0;i<poly.length;i++){
+    const p=poly[i],q=poly[(i+1)%poly.length];
+    a+=p.x*q.y-q.x*p.y;
+  }
+  return a/2;
+}
+function absArea(poly){return Math.abs(polygonArea(poly))}
+function polygonCentroid(poly){
+  let a=polygonArea(poly),cx=0,cy=0;
+  if(Math.abs(a)<1e-8){
+    let x=0,y=0;
+    for(const p of poly){x+=p.x;y+=p.y}
+    return{x:x/poly.length,y:y/poly.length}
+  }
+  for(let i=0;i<poly.length;i++){
+    const p=poly[i],q=poly[(i+1)%poly.length],f=p.x*q.y-q.x*p.y;
+    cx+=(p.x+q.x)*f; cy+=(p.y+q.y)*f;
+  }
+  return{x:cx/(6*a),y:cy/(6*a)}
+}
+function polyBBox(poly){
+  let xs=poly.map(p=>p.x),ys=poly.map(p=>p.y);
+  let x=Math.min(...xs),X=Math.max(...xs),y=Math.min(...ys),Y=Math.max(...ys);
+  return{x,y,w:X-x,h:Y-y}
+}
+function cleanPoly(poly){
+  const out=[];
+  for(const p of poly){
+    const q=out[out.length-1];
+    if(!q||Math.hypot(p.x-q.x,p.y-q.y)>.001)out.push({x:p.x,y:p.y});
+  }
+  if(out.length>2&&Math.hypot(out[0].x-out[out.length-1].x,out[0].y-out[out.length-1].y)<.001)out.pop();
+  return out;
+}
+
+/* clip polygon against x<=cut / x>=cut or y<=cut / y>=cut.
+   This guarantees children stay inside the parent polygon. */
+function clipHalf(poly,axis,cut,keepLow){
+  const val=p=>axis==='x'?p.x:p.y;
+  const inside=p=>keepLow?val(p)<=cut+1e-7:val(p)>=cut-1e-7;
+  const out=[];
+  for(let i=0;i<poly.length;i++){
+    const a=poly[i],b=poly[(i+1)%poly.length];
+    const ia=inside(a),ib=inside(b);
+    if(ia)out.push({x:a.x,y:a.y});
+    if(ia!==ib){
+      const va=val(a),vb=val(b);
+      const t=(cut-va)/(vb-va);
+      out.push({x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t});
     }
   }
-  for(const a of items){
-    a.c.geom={cx:a.x,cy:a.y,rx:a.rx*.90,ry:a.ry*.90};
-    pack(a.c);
-  }
+  return cleanPoly(out);
 }
-pack(roots[0]);
 
-function organicPath(t){
-  const q=t.geom;if(!q)return '';
-  const n=18,pts=[];
-  for(let i=0;i<n;i++){
-    const a=Math.PI*2*i/n;
-    const noise=.90+.10*h2(t.id,i+10);
-    pts.push([q.cx+Math.cos(a)*q.rx*noise,q.cy+Math.sin(a)*q.ry*noise]);
+function cutForFraction(poly,axis,fraction){
+  const b=polyBBox(poly);
+  let lo=axis==='x'?b.x:b.y, hi=axis==='x'?b.x+b.w:b.y+b.h;
+  const total=absArea(poly),target=total*fraction;
+  for(let i=0;i<42;i++){
+    const mid=(lo+hi)/2;
+    const low=clipHalf(poly,axis,mid,true);
+    const a=low.length>=3?absArea(low):0;
+    if(a<target)lo=mid;else hi=mid;
   }
-  const mids=pts.map((p,i)=>[(p[0]+pts[(i+1)%n][0])/2,(p[1]+pts[(i+1)%n][1])/2]);
-  let d=`M${mids[n-1][0]},${mids[n-1][1]}`;
-  for(let i=0;i<n;i++)d+=` Q${pts[i][0]},${pts[i][1]} ${mids[i][0]},${mids[i][1]}`;
+  return(lo+hi)/2;
+}
+
+/* Find the shared clipping edge. */
+function cutVertices(poly,axis,cut){
+  const eps=.04;
+  return poly.filter(p=>Math.abs((axis==='x'?p.x:p.y)-cut)<eps);
+}
+function farthestPair(points){
+  if(points.length<2)return null;
+  let best=null,dmax=-1;
+  for(let i=0;i<points.length;i++)for(let j=i+1;j<points.length;j++){
+    let d=(points[i].x-points[j].x)**2+(points[i].y-points[j].y)**2;
+    if(d>dmax){dmax=d;best=[points[i],points[j]]}
+  }
+  return best;
+}
+
+/* A zero-mean sinusoid makes the common boundary irregular while preserving
+   the split area: positive lobes are exactly compensated by negative lobes. */
+function wavyDivider(a,b,axis,seed,parentBox,depth){
+  const pts=[];
+  const N=8;
+  const len=Math.hypot(b.x-a.x,b.y-a.y);
+  const baseAmp=Math.min(
+    len*(depth<2?.055:.045),
+    Math.min(parentBox.w,parentBox.h)*(depth<2?.040:.030)
+  );
+  const amp=baseAmp*(.60+.55*h2(seed,771));
+  const phase=2*Math.PI*h2(seed,772);
+  const second=.28+.25*h2(seed,773);
+
+  for(let i=0;i<=N;i++){
+    const t=i/N;
+    const envelope=Math.sin(Math.PI*t); // zero movement at endpoints
+    /* Both sine components have zero integral over 0..1. */
+    const off=amp*envelope*(
+      Math.sin(2*Math.PI*t+phase)*.72+
+      Math.sin(4*Math.PI*t-phase*.7)*second
+    );
+    let x=a.x+(b.x-a.x)*t, y=a.y+(b.y-a.y)*t;
+    if(axis==='x')x+=off;else y+=off;
+    pts.push({x,y});
+  }
+  return pts;
+}
+
+function samePoint(a,b,eps=.15){return Math.hypot(a.x-b.x,a.y-b.y)<eps}
+
+/* Replace the straight common cut edge by the exact same wavy polyline
+   in both child polygons. No gap and no overlap are introduced. */
+function replaceDivider(poly,axis,cut,wave){
+  if(poly.length<3)return poly;
+  const on=p=>Math.abs((axis==='x'?p.x:p.y)-cut)<.08;
+  let edge=-1;
+  for(let i=0;i<poly.length;i++){
+    if(on(poly[i])&&on(poly[(i+1)%poly.length])){
+      edge=i;break;
+    }
+  }
+  if(edge<0)return poly;
+
+  const a=poly[edge],b=poly[(edge+1)%poly.length];
+  const direct=Math.hypot(a.x-wave[0].x,a.y-wave[0].y)+Math.hypot(b.x-wave[wave.length-1].x,b.y-wave[wave.length-1].y);
+  const reverse=Math.hypot(a.x-wave[wave.length-1].x,a.y-wave[wave.length-1].y)+Math.hypot(b.x-wave[0].x,b.y-wave[0].y);
+  const seq=(direct<=reverse?wave:[...wave].reverse()).map(p=>({x:p.x,y:p.y}));
+
+  const out=[];
+  for(let i=0;i<poly.length;i++){
+    out.push({x:poly[i].x,y:poly[i].y});
+    if(i===edge){
+      for(let k=1;k<seq.length-1;k++)out.push(seq[k]);
+    }
+  }
+  return cleanPoly(out);
+}
+
+/* Stable weighted binary subdivision.
+   Children are grouped so both sides receive roughly their requested weight.
+   The cut location is then solved from polygon AREA, not width/radius. */
+function splitItems(items){
+  if(items.length<=1)return[items,[]];
+  const sorted=[...items].sort((a,b)=>weight(b)-weight(a));
+  const A=[],B=[];let wa=0,wb=0;
+  for(const x of sorted){
+    if(wa<=wb){A.push(x);wa+=weight(x)}
+    else{B.push(x);wb+=weight(x)}
+  }
+  if(!A.length||!B.length){
+    const m=Math.ceil(sorted.length/2);
+    return[sorted.slice(0,m),sorted.slice(m)];
+  }
+  return[A,B];
+}
+
+function partition(poly,items,depth,parentId){
+  if(!items.length)return;
+  if(items.length===1){
+    const t=items[0];
+    t.poly=poly;
+    t.depth=depth;
+    const cs=children.get(String(t.id))||[];
+    if(cs.length)partition(poly,cs,depth+1,String(t.id));
+    return;
+  }
+
+  const [A,B]=splitItems(items);
+  const wA=A.reduce((s,x)=>s+weight(x),0);
+  const wB=B.reduce((s,x)=>s+weight(x),0);
+  const fraction=wA/(wA+wB);
+  const box=polyBBox(poly);
+
+  /* Alternate orientation, biased to the long side, to avoid stripe-like maps. */
+  let axis;
+  if(box.w>box.h*1.20)axis='x';
+  else if(box.h>box.w*1.20)axis='y';
+  else axis=h2(parentId,depth*43+A.length*7)>.5?'x':'y';
+
+  const cut=cutForFraction(poly,axis,fraction);
+  let pA=clipHalf(poly,axis,cut,true);
+  let pB=clipHalf(poly,axis,cut,false);
+
+  if(pA.length<3||pB.length<3){
+    /* Extremely pathological fallback: try the other axis. */
+    axis=axis==='x'?'y':'x';
+    const c2=cutForFraction(poly,axis,fraction);
+    pA=clipHalf(poly,axis,c2,true);
+    pB=clipHalf(poly,axis,c2,false);
+    if(pA.length<3||pB.length<3){
+      /* Last resort leaves geometry valid rather than overlapping. */
+      const half=Math.ceil(items.length/2);
+      partition(poly,items.slice(0,half),depth,parentId+'a');
+      partition(poly,items.slice(half),depth,parentId+'b');
+      return;
+    }
+    const pair=farthestPair(cutVertices(pA,axis,c2));
+    if(pair){
+      const wave=wavyDivider(pair[0],pair[1],axis,parentId+'|'+depth+'|'+A[0].id,box,depth);
+      pA=replaceDivider(pA,axis,c2,wave);
+      pB=replaceDivider(pB,axis,c2,wave);
+    }
+  }else{
+    const pair=farthestPair(cutVertices(pA,axis,cut));
+    if(pair){
+      const wave=wavyDivider(pair[0],pair[1],axis,parentId+'|'+depth+'|'+A[0].id,box,depth);
+      pA=replaceDivider(pA,axis,cut,wave);
+      pB=replaceDivider(pB,axis,cut,wave);
+    }
+  }
+
+  partition(pA,A,depth,parentId+'L');
+  partition(pB,B,depth,parentId+'R');
+}
+
+/* Organic outer shoreline for the complete living world.
+   This polygon is deterministic and convex-ish; all subsequent partitions
+   happen inside it, so no child can escape outside. */
+function outerWorld(){
+  const cx=1200,cy=765,rx=1100,ry=650,n=32,pts=[];
+  for(let i=0;i<n;i++){
+    const a=2*Math.PI*i/n;
+    const noise=.945+.055*h2('world',i);
+    pts.push({x:cx+Math.cos(a)*rx*noise,y:cy+Math.sin(a)*ry*noise});
+  }
+  return pts;
+}
+roots[0].poly=outerWorld();
+partition(roots[0].poly,children.get(String(roots[0].id))||[],0,'Life');
+
+/* ---------- rendering ---------- */
+
+function pathFromPoly(poly){
+  if(!poly||poly.length<3)return'';
+  /* Quadratic midpoint smoothing follows the same polygon and never changes
+     taxon ownership logic; overlap guarantees come from the shared vertices. */
+  const mids=poly.map((p,i)=>{
+    const q=poly[(i+1)%poly.length];
+    return{x:(p.x+q.x)/2,y:(p.y+q.y)/2}
+  });
+  let d=`M${mids[mids.length-1].x},${mids[mids.length-1].y}`;
+  for(let i=0;i<poly.length;i++){
+    d+=` Q${poly[i].x},${poly[i].y} ${mids[i].x},${mids[i].y}`;
+  }
   return d+'Z';
 }
+
 function minZoom(t){
   const d=Math.max(0,t.depth||0);
   const rank=(t.rank||'').toUpperCase();
-  const rankZ={DOMAIN:1,KINGDOM:1,PHYLUM:1.25,CLASS:1.7,ORDER:2.5,FAMILY:3.8,GENUS:5.7,SPECIES:8.2};
-  return Math.max(rankZ[rank]||1.2,1+d*.58);
+  const rankZ={DOMAIN:1,KINGDOM:1,PHYLUM:1.25,CLASS:1.65,ORDER:2.35,FAMILY:3.7,GENUS:5.5,SPECIES:8.0};
+  return Math.max(rankZ[rank]||1.2,1+d*.56);
 }
+
 const elems=[];
 [...taxa].sort((a,b)=>(a.depth||0)-(b.depth||0)).forEach(t=>{
-  if(t.id==='__life'||!t.geom)return;
+  if(t.id==='__life'||!t.poly||t.poly.length<3)return;
+
+  t.box=polyBBox(t.poly);
+  t.center=polygonCentroid(t.poly);
+  t.area=absArea(t.poly);
+
   const p=document.createElementNS(NS,'path');
-  p.setAttribute('d',organicPath(t));
+  p.setAttribute('d',pathFromPoly(t.poly));
   p.setAttribute('fill',tint(palette[t.rank]||'#b7d0c2',.02+.13*h2(t.id,50)));
   p.setAttribute('class','taxonPath');
-  p.setAttribute('stroke-width',Math.max(1.1,8-(t.depth||0)*1.05));
+  p.setAttribute('stroke-width',Math.max(1.0,8-(t.depth||0)*1.0));
   p.dataset.minz=minZoom(t);p.dataset.id=t.id;
   p.onclick=e=>{e.stopPropagation();focus(t)};
   rg.appendChild(p);
 
   const text=document.createElementNS(NS,'text');
-  text.setAttribute('x',t.geom.cx);text.setAttribute('y',t.geom.cy);
+  text.setAttribute('x',t.center.x);text.setAttribute('y',t.center.y);
   text.setAttribute('text-anchor','middle');text.setAttribute('class','label');
   text.textContent=t.vernacularName||t.canonicalName;
-  text.dataset.minz=(minZoom(t)*1.03);text.dataset.id=t.id;
+  text.dataset.minz=(minZoom(t)*1.02);text.dataset.id=t.id;
   lg.appendChild(text);
+
   elems.push({t,p,text});
 });
 
+/* ---------- map interaction (same behavior as the working version) ---------- */
+
+const world={x:0,y:0,w:2400,h:1500};
 let view={...world},target={...world},ptr=new Map(),drag=false,last=null,pinch=null,lastSemantic=-1;
-function fit(r){let ar=innerWidth/innerHeight,rr=r.w/r.h;if(rr>ar){let nh=r.w/ar,d=nh-r.h;r.y-=d/2;r.h=nh}else{let nw=r.h*ar,d=nw-r.w;r.x-=d/2;r.w=nw}}
-function bbox(t){const q=t.geom;return{x:q.cx-q.rx,y:q.cy-q.ry,w:q.rx*2,h:q.ry*2}}
-function focus(t){let r=bbox(t),pad=.28;r={x:r.x-r.w*pad,y:r.y-r.h*pad,w:r.w*(1+2*pad),h:r.h*(1+2*pad)};fit(r);target=r;renderCrumbs(t);if((t.rank||'').toUpperCase()==='ORDER'&&t.inatObservationCount!=null){levelEl.textContent=`orde · ${Number(t.inatObservationCount).toLocaleString('nl-NL')} iNat-waarnemingen · gewicht ${Number(t.inatAreaWeight||1).toFixed(2)}`}else{levelEl.textContent=(t.rank||'taxon').toLowerCase()}}
-function home(){target={...world};fit(target);crumbs.innerHTML=''}
+
+function fit(r){
+  let ar=innerWidth/innerHeight,rr=r.w/r.h;
+  if(rr>ar){let nh=r.w/ar,d=nh-r.h;r.y-=d/2;r.h=nh}
+  else{let nw=r.h*ar,d=nw-r.w;r.x-=d/2;r.w=nw}
+}
+function bbox(t){return t.box||polyBBox(t.poly)}
+function focus(t){
+  let r={...bbox(t)},pad=.20;
+  r={x:r.x-r.w*pad,y:r.y-r.h*pad,w:r.w*(1+2*pad),h:r.h*(1+2*pad)};
+  fit(r);target=r;renderCrumbs(t);
+  if((t.rank||'').toUpperCase()==='ORDER'&&t.inatObservationCount!=null){
+    levelEl.textContent=`orde · ${Number(t.inatObservationCount).toLocaleString('nl-NL')} iNat-waarnemingen · gewicht ${Number(t.inatAreaWeight||1).toFixed(2)}`
+  }else levelEl.textContent=(t.rank||'taxon').toLowerCase()
+}
+function home(){target={...world};fit(target);crumbs.innerHTML='';levelEl.textContent='wereld'}
 document.getElementById('home').onclick=home;
-function renderCrumbs(t){let arr=[];while(t&&t.id!=='__life'){arr.unshift(t);t=byId.get(String(t.parentId))}crumbs.innerHTML='';for(const x of arr){let s=document.createElement('span');s.className='crumb';s.textContent=x.canonicalName;s.onclick=()=>focus(x);crumbs.appendChild(s)}}
+
+function renderCrumbs(t){
+  let arr=[];
+  while(t&&t.id!=='__life'){arr.unshift(t);t=byId.get(String(t.parentId))}
+  crumbs.innerHTML='';
+  for(const x of arr){
+    let s=document.createElement('span');
+    s.className='crumb';s.textContent=x.canonicalName;s.onclick=()=>focus(x);
+    crumbs.appendChild(s)
+  }
+}
 function norm(s){return String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')}
-document.getElementById('search').onkeydown=e=>{if(e.key!=='Enter')return;let q=norm(e.target.value),hit=taxa.find(t=>norm(t.canonicalName)===q)||taxa.find(t=>norm(t.canonicalName).includes(q));if(hit)focus(hit)}
+document.getElementById('search').onkeydown=e=>{
+  if(e.key!=='Enter')return;
+  let q=norm(e.target.value);
+  let hit=taxa.find(t=>norm(t.canonicalName)===q)||
+          taxa.find(t=>norm(t.vernacularName)===q)||
+          taxa.find(t=>norm(t.canonicalName).includes(q));
+  if(hit)focus(hit)
+}
 
 function semantic(z){
-  if(Math.abs(z-lastSemantic)<.09)return;lastSemantic=z;
+  if(Math.abs(z-lastSemantic)<.08)return;
+  lastSemantic=z;
   let deepest=0;
   for(const o of elems){
     const visible=z>=+o.p.dataset.minz;
     o.p.classList.toggle('hidden',!visible);
     if(visible)deepest=Math.max(deepest,o.t.depth||0);
-    const screenW=o.t.geom.rx*2*z;
-    const labelVisible=visible && z>=+o.text.dataset.minz && screenW>72;
+
+    const screenW=(o.t.box?.w||0)*z;
+    const screenH=(o.t.box?.h||0)*z;
+    const labelVisible=visible&&z>=+o.text.dataset.minz&&screenW>62&&screenH>26;
     o.text.classList.toggle('hidden',!labelVisible);
+
     if(labelVisible){
-      const fs=Math.max(8,Math.min(21,9+Math.sqrt(Math.max(20,screenW))/5));
+      const fs=Math.max(8,Math.min(22,8.5+Math.sqrt(Math.max(20,Math.min(screenW,screenH)*2))/4.4));
       o.text.setAttribute('font-size',fs/z);
     }
   }
-  const names=['rijk/domein','stam','klasse','orde','familie','genus','soort'];
-  levelEl.textContent=names[Math.min(names.length-1,Math.max(0,deepest))]||'wereld';
+  if(!crumbs.children.length){
+    const names=['rijk/domein','stam','klasse','orde','familie','genus','soort'];
+    levelEl.textContent=names[Math.min(names.length-1,Math.max(0,deepest))]||'wereld';
+  }
 }
-svg.addEventListener('wheel',e=>{e.preventDefault();let r=svg.getBoundingClientRect(),px=(e.clientX-r.left)/r.width,py=(e.clientY-r.top)/r.height,wx=target.x+px*target.w,wy=target.y+py*target.h,f=Math.exp(e.deltaY*.0012);target.w=Math.max(24,Math.min(3000,target.w*f));target.h=Math.max(15,Math.min(1900,target.h*f));target.x=wx-px*target.w;target.y=wy-py*target.h},{passive:false});
-svg.onpointerdown=e=>{svg.setPointerCapture?.(e.pointerId);ptr.set(e.pointerId,{x:e.clientX,y:e.clientY});if(ptr.size===1){drag=true;last={x:e.clientX,y:e.clientY}}if(ptr.size===2){let p=[...ptr.values()];pinch={d:Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y),v:{...target},cx:(p[0].x+p[1].x)/2,cy:(p[0].y+p[1].y)/2};drag=false}};
-svg.onpointermove=e=>{if(!ptr.has(e.pointerId))return;ptr.set(e.pointerId,{x:e.clientX,y:e.clientY});if(ptr.size===2&&pinch){let p=[...ptr.values()],d=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y),sc=pinch.d/d,r=svg.getBoundingClientRect(),px=(pinch.cx-r.left)/r.width,py=(pinch.cy-r.top)/r.height,wx=pinch.v.x+px*pinch.v.w,wy=pinch.v.y+py*pinch.v.h;target.w=Math.max(24,Math.min(3000,pinch.v.w*sc));target.h=Math.max(15,Math.min(1900,pinch.v.h*sc));target.x=wx-px*target.w;target.y=wy-py*target.h}else if(drag){let dx=e.clientX-last.x,dy=e.clientY-last.y;target.x-=dx/innerWidth*target.w;target.y-=dy/innerHeight*target.h;last={x:e.clientX,y:e.clientY}}};
-function end(e){ptr.delete(e.pointerId);if(ptr.size<2)pinch=null;if(!ptr.size){drag=false;last=null}}svg.onpointerup=end;svg.onpointercancel=end;
 
-function anim(){let k=.16;view.x+=(target.x-view.x)*k;view.y+=(target.y-view.y)*k;view.w+=(target.w-view.w)*k;view.h+=(target.h-view.h)*k;svg.setAttribute('viewBox',`${view.x} ${view.y} ${view.w} ${view.h}`);let z=2400/view.w;zoomEl.textContent=z.toFixed(2)+'×';semantic(z);requestAnimationFrame(anim)}
-status.textContent=`${payload.meta.taxa||taxa.length} taxa · orde-oppervlakte: iNaturalist · 10× waarnemingen = 2× ruimte`;
+svg.addEventListener('wheel',e=>{
+  e.preventDefault();
+  let r=svg.getBoundingClientRect(),px=(e.clientX-r.left)/r.width,py=(e.clientY-r.top)/r.height;
+  let wx=target.x+px*target.w,wy=target.y+py*target.h,f=Math.exp(e.deltaY*.0012);
+  target.w=Math.max(24,Math.min(3000,target.w*f));
+  target.h=Math.max(15,Math.min(1900,target.h*f));
+  target.x=wx-px*target.w;target.y=wy-py*target.h
+},{passive:false});
+
+svg.onpointerdown=e=>{
+  svg.setPointerCapture?.(e.pointerId);
+  ptr.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(ptr.size===1){drag=true;last={x:e.clientX,y:e.clientY}}
+  if(ptr.size===2){
+    let p=[...ptr.values()];
+    pinch={d:Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y),v:{...target},
+           cx:(p[0].x+p[1].x)/2,cy:(p[0].y+p[1].y)/2};
+    drag=false
+  }
+};
+svg.onpointermove=e=>{
+  if(!ptr.has(e.pointerId))return;
+  ptr.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(ptr.size===2&&pinch){
+    let p=[...ptr.values()],d=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y),sc=pinch.d/d;
+    let r=svg.getBoundingClientRect(),px=(pinch.cx-r.left)/r.width,py=(pinch.cy-r.top)/r.height;
+    let wx=pinch.v.x+px*pinch.v.w,wy=pinch.v.y+py*pinch.v.h;
+    target.w=Math.max(24,Math.min(3000,pinch.v.w*sc));
+    target.h=Math.max(15,Math.min(1900,pinch.v.h*sc));
+    target.x=wx-px*target.w;target.y=wy-py*target.h
+  }else if(drag){
+    let dx=e.clientX-last.x,dy=e.clientY-last.y;
+    target.x-=dx/innerWidth*target.w;
+    target.y-=dy/innerHeight*target.h;
+    last={x:e.clientX,y:e.clientY}
+  }
+};
+function end(e){
+  ptr.delete(e.pointerId);
+  if(ptr.size<2)pinch=null;
+  if(!ptr.size){drag=false;last=null}
+}
+svg.onpointerup=end;svg.onpointercancel=end;
+
+function anim(){
+  let k=.16;
+  view.x+=(target.x-view.x)*k;view.y+=(target.y-view.y)*k;
+  view.w+=(target.w-view.w)*k;view.h+=(target.h-view.h)*k;
+  svg.setAttribute('viewBox',`${view.x} ${view.y} ${view.w} ${view.h}`);
+  let z=2400/view.w;
+  zoomEl.textContent=z.toFixed(2)+'×';
+  semantic(z);
+  requestAnimationFrame(anim)
+}
+
+status.textContent=`${payload.meta.taxa||taxa.length} taxa · organische partitie · orde-oppervlakte: iNaturalist · 10× = 2× ruimte`;
 home();requestAnimationFrame(anim);
 })();
 </script></body></html>
