@@ -536,7 +536,7 @@ function minZoom(t){
     SPECIES:7.6
   };
   return Math.max(rankZ[rank]||.85,.68+d*.34);
-};return Math.max(rankZ[rank]||1.2,1+d*.56)}
+}
 
 const elems=[];
 [...taxa].sort((a,b)=>(a.depth||0)-(b.depth||0)).forEach(t=>{
