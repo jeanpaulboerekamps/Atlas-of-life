@@ -9,186 +9,164 @@ ROOT=HERE.parent
 CFG=json.loads((ROOT/"config.json").read_text(encoding="utf-8"))
 GBIF=CFG["taxonomy"]["apiBase"].rstrip("/")
 DATASET=CFG["taxonomy"]["datasetKey"]
-MAX_DEPTH=int(CFG["limits"]["maxDepth"])
 MAX_TAXA=int(CFG["limits"]["maxTaxa"])
+MAX_DEPTH=int(CFG["limits"]["maxDepth"])
 MAX_CHILDREN=int(CFG["limits"]["maxChildrenPerTaxon"])
-BOOSTS=CFG["weights"]["iconBoosts"]
-
 INAT="https://api.inaturalist.org/v1"
 INAT_DELAY=1.05
-ORDER_EXPONENT=math.log10(2.0)  # 10x observations => 2x area
-HEADERS={"User-Agent":"AtlasOfLifePrototype/0.7"}
-PREFERRED_ROOT_RANK={"Animalia":"KINGDOM","Plantae":"KINGDOM","Fungi":"KINGDOM","Bacteria":"DOMAIN"}
-_last_inat=0.0
+EXP=math.log10(2.0)
+HEADERS={"User-Agent":"AtlasOfLifePrototype/0.8"}
+ROOT_NAMES=["Animalia","Plantae","Fungi","Bacteria"]
+PREFERRED={"Animalia":"KINGDOM","Plantae":"KINGDOM","Fungi":"KINGDOM","Bacteria":"DOMAIN"}
+_last=0.0
 
-def get_json(url,retries=4,throttle_inat=False):
-    global _last_inat
-    if throttle_inat:
-        elapsed=time.monotonic()-_last_inat
-        if elapsed<INAT_DELAY:
-            time.sleep(INAT_DELAY-elapsed)
-    for attempt in range(retries):
+def get_json(url,retries=4,inat=False):
+    global _last
+    if inat:
+        dt=time.monotonic()-_last
+        if dt<INAT_DELAY: time.sleep(INAT_DELAY-dt)
+    for i in range(retries):
         try:
             req=urllib.request.Request(url,headers=HEADERS)
-            with urllib.request.urlopen(req,timeout=45) as r:
-                data=json.load(r)
-            if throttle_inat:
-                _last_inat=time.monotonic()
+            with urllib.request.urlopen(req,timeout=45) as r: data=json.load(r)
+            if inat:_last=time.monotonic()
             return data
         except Exception:
-            if attempt+1==retries: raise
-            time.sleep(1.5*(attempt+1))
+            if i+1==retries: raise
+            time.sleep(1.5*(i+1))
 
-def normalize_results(payload):
-    if isinstance(payload,list): return [x for x in payload if isinstance(x,dict)]
-    if isinstance(payload,dict):
-        if isinstance(payload.get("results"),list): return [x for x in payload["results"] if isinstance(x,dict)]
-        if "key" in payload: return [payload]
+def rows(x):
+    if isinstance(x,list): return [r for r in x if isinstance(r,dict)]
+    if isinstance(x,dict):
+        if isinstance(x.get("results"),list): return [r for r in x["results"] if isinstance(r,dict)]
+        if "key" in x:return [x]
     return []
 
+def root_endpoint():
+    return rows(get_json(f"{GBIF}/species/root/{urllib.parse.quote(DATASET)}"))
+
 def resolve_root(name):
+    exact=[r for r in root_endpoint() if (r.get("canonicalName") or r.get("scientificName") or "").casefold()==name.casefold()]
+    if exact:return exact[0]
     q=urllib.parse.urlencode({"q":name,"datasetKey":DATASET,"limit":100})
-    rows=normalize_results(get_json(f"{GBIF}/species/search?{q}"))
-    exact=[r for r in rows if (r.get("canonicalName") or r.get("scientificName") or "").casefold()==name.casefold()]
-    cands=exact or rows
-    pref=PREFERRED_ROOT_RANK.get(name)
-    ranked=[r for r in cands if (r.get("rank") or "").upper()==pref]
-    if ranked: cands=ranked
-    if not cands: raise RuntimeError(f"Cannot resolve root {name}")
-    cands.sort(key=lambda r:(r.get("datasetKey")==DATASET,(r.get("taxonomicStatus") or r.get("status") or "").upper()=="ACCEPTED"),reverse=True)
-    return cands[0]
+    rs=rows(get_json(f"{GBIF}/species/search?{q}"))
+    exact=[r for r in rs if (r.get("canonicalName") or r.get("scientificName") or "").casefold()==name.casefold()]
+    ranked=[r for r in exact if (r.get("rank") or "").upper()==PREFERRED[name]]
+    if ranked:return ranked[0]
+    if exact:return exact[0]
+    raise RuntimeError(f"Cannot resolve root {name}")
 
 def children(key):
-    out=[]; offset=0
+    out=[];offset=0
     while True:
         page=get_json(f"{GBIF}/species/{key}/children?limit=1000&offset={offset}")
-        batch=normalize_results(page); out.extend(batch)
-        if not isinstance(page,dict) or page.get("endOfRecords",True) or not batch: break
+        batch=rows(page);out.extend(batch)
+        if not isinstance(page,dict) or page.get("endOfRecords",True) or not batch:break
         offset+=len(batch)
-    return out
+    return [k for k in out if (k.get("taxonomicStatus") or k.get("status") or "").upper() not in {"SYNONYM","HETEROTYPIC_SYNONYM"}]
 
-def clean_usage(u):
-    return {
-      "id":str(u.get("key")),"key":u.get("key"),
-      "parentId":str(u.get("parentKey")) if u.get("parentKey") is not None else None,
+def clean(u,parent=None,depth=0,rootname=None):
+    return {"id":str(u.get("key")),"key":u.get("key"),
+      "parentId":str(parent) if parent is not None else (str(u.get("parentKey")) if u.get("parentKey") is not None else None),
       "scientificName":u.get("scientificName") or u.get("canonicalName") or "Unnamed",
       "canonicalName":u.get("canonicalName") or u.get("scientificName") or "Unnamed",
-      "rank":(u.get("rank") or "UNRANKED").upper(),
-      "status":u.get("taxonomicStatus") or u.get("status") or "",
-      "vernacularName":u.get("vernacularName")
-    }
+      "rank":(u.get("rank") or "UNRANKED").upper(),"status":u.get("taxonomicStatus") or u.get("status") or "",
+      "depth":depth,"rootName":rootname}
 
-def child_priority(u):
-    scores={"DOMAIN":10,"KINGDOM":9,"PHYLUM":8,"CLASS":7,"ORDER":6,"FAMILY":5,"GENUS":4,"SPECIES":3}
-    rank=scores.get((u.get("rank") or "").upper(),1)
-    name=u.get("canonicalName") or u.get("scientificName") or ""
-    accepted=(u.get("taxonomicStatus") or u.get("status") or "").upper()=="ACCEPTED"
-    return (1 if accepted else 0,rank,float(BOOSTS.get(name,0)))
+def build_root(root,quota):
+    taxa=[];seen=set();q=deque([(root,0,None)])
+    rootname=root.get("canonicalName") or root.get("scientificName")
+    while q and len(taxa)<quota:
+        u,depth,parent=q.popleft();key=u.get("key")
+        if key is None or key in seen:continue
+        seen.add(key);n=clean(u,parent,depth,rootname);taxa.append(n)
+        if depth>=MAX_DEPTH:continue
+        try:kids=children(key)
+        except Exception as e:
+            print("WARN children",key,e,flush=True);continue
+        if n["rank"] in {"ORDER","FAMILY","GENUS","SPECIES"}:
+            kids=kids[:MAX_CHILDREN]
+        for c in kids:q.append((c,depth+1,key))
+    return taxa
 
-def inat_resolve_order(name):
+def inat_order(name):
     q=urllib.parse.urlencode({"q":name,"rank":"order","is_active":"true","per_page":30})
-    payload=get_json(f"{INAT}/taxa?{q}",throttle_inat=True)
-    rows=payload.get("results",[]) if isinstance(payload,dict) else []
-    exact=[r for r in rows if (r.get("name") or "").casefold()==name.casefold() and (r.get("rank") or "").casefold()=="order"]
-    cands=exact or [r for r in rows if (r.get("rank") or "").casefold()=="order"]
-    if not cands: return None
-    cands.sort(key=lambda r:(bool(r.get("is_active",True)),(r.get("name") or "").casefold()==name.casefold()),reverse=True)
-    return cands[0]
+    rs=get_json(f"{INAT}/taxa?{q}",inat=True).get("results",[])
+    exact=[r for r in rs if (r.get("name") or "").casefold()==name.casefold() and (r.get("rank") or "").casefold()=="order"]
+    return exact[0] if exact else None
 
-def inat_count(taxon_id):
-    q=urllib.parse.urlencode({"taxon_id":taxon_id,"per_page":1})
-    payload=get_json(f"{INAT}/observations?{q}",throttle_inat=True)
-    return int(payload.get("total_results",0)) if isinstance(payload,dict) else 0
+def obs_count(tid):
+    q=urllib.parse.urlencode({"taxon_id":tid,"per_page":1})
+    return int(get_json(f"{INAT}/observations?{q}",inat=True).get("total_results",0))
 
 def main():
-    roots=[resolve_root(n) for n in CFG["taxonomy"]["roots"]]
-    print("Resolved roots:",[(r.get("canonicalName"),r.get("rank"),r.get("key")) for r in roots])
+    roots=[resolve_root(n) for n in ROOT_NAMES]
+    print("Resolved:",[(r.get("canonicalName"),r.get("rank"),r.get("key")) for r in roots],flush=True)
+    quota=max(100,MAX_TAXA//len(roots))
+    taxa=[]
+    for r in roots:
+        part=build_root(r,quota)
+        print(r.get("canonicalName"),"sampled",len(part),"taxa",flush=True)
+        taxa.extend(part)
+    taxa=taxa[:MAX_TAXA]
 
-    taxa=[]; seen=set(); q=deque((r,0,None) for r in roots)
-    while q and len(taxa)<MAX_TAXA:
-        u,depth,parent=q.popleft(); key=u.get("key")
-        if key is None or key in seen: continue
-        seen.add(key); n=clean_usage(u)
-        if parent is not None: n["parentId"]=str(parent)
-        n["depth"]=depth; taxa.append(n)
-        if depth>=MAX_DEPTH: continue
-        try: kids=children(key)
-        except Exception as exc:
-            print("WARN children",key,exc); continue
-        kids=[k for k in kids if (k.get("taxonomicStatus") or k.get("status") or "").upper() not in {"SYNONYM","HETEROTYPIC_SYNONYM"}]
-        kids.sort(key=child_priority,reverse=True)
-        for child in kids[:MAX_CHILDREN]:
-            q.append((child,depth+1,key))
-
-    by_id={n["id"]:n for n in taxa}
-    kids=defaultdict(list)
+    by={n["id"]:n for n in taxa};kids=defaultdict(list)
     for n in taxa:
-        if n["parentId"] in by_id: kids[n["parentId"]].append(n["id"])
-
-    memo={}
-    def desc(nid):
-        if nid in memo:return memo[nid]
-        memo[nid]=sum(1+desc(cid) for cid in kids.get(nid,[]))
-        return memo[nid]
-
-    for n in taxa:
-        proxy=desc(n["id"]); n["descendantProxy"]=proxy
-        icon=float(BOOSTS.get(n["canonicalName"],1))
-        n["popularityBoost"]=icon
-        n["weight"]=max(float(CFG["weights"]["minWeight"]),float(CFG["weights"]["base"])+math.pow(max(1,proxy),float(CFG["weights"]["descendantExponent"]))+icon)
+        if n["parentId"] in by:kids[n["parentId"]].append(n["id"])
 
     orders=[n for n in taxa if n["rank"]=="ORDER"]
-    print(f"Enriching {len(orders)} orders with iNaturalist counts")
-    matched=0
+    print("Orders:",len(orders),flush=True)
     for i,n in enumerate(orders,1):
-        name=n["canonicalName"]
         try:
-            it=inat_resolve_order(name)
+            it=inat_order(n["canonicalName"])
             if not it:
-                n.update({"inatTaxonId":None,"inatObservationCount":0,"inatAreaWeight":1.0})
-                print(f"[iNat {i}/{len(orders)}] no match {name}")
+                n.update(inatTaxonId=None,inatObservationCount=0,inatAreaWeight=0.0)
+                print(f"[{i}/{len(orders)}] no exact iNat match {n['canonicalName']}",flush=True)
                 continue
-            count=inat_count(int(it["id"]))
-            area=math.pow(max(1,count),ORDER_EXPONENT)
-            n.update({"inatTaxonId":int(it["id"]),"inatObservationCount":count,"inatAreaWeight":round(area,6),"inatMatchedName":it.get("name")})
-            matched+=1
-            print(f"[iNat {i}/{len(orders)}] {name}: {count:,} -> {area:.3f}")
-        except Exception as exc:
-            n.update({"inatTaxonId":None,"inatObservationCount":0,"inatAreaWeight":1.0,"inatError":str(exc)})
-            print(f"[iNat {i}/{len(orders)}] WARN {name}: {exc}")
-    print(f"Matched {matched}/{len(orders)} orders")
+            c=obs_count(int(it["id"]));w=math.pow(max(1,c),EXP)
+            n.update(inatTaxonId=int(it["id"]),inatObservationCount=c,inatAreaWeight=w)
+            print(f"[{i}/{len(orders)}] {n['canonicalName']}: {c:,} -> {w:.3f}",flush=True)
+        except Exception as e:
+            n.update(inatTaxonId=None,inatObservationCount=0,inatAreaWeight=0.0)
+            print("WARN iNat",n["canonicalName"],e,flush=True)
 
-    def map_weight(nid,inside_order=False):
-        n=by_id[nid]; rank=n["rank"]; child_ids=kids.get(nid,[])
-        if rank=="ORDER":
-            n["mapWeight"]=float(n.get("inatAreaWeight",1.0))
-            for cid in child_ids: map_weight(cid,True)
-            return n["mapWeight"]
-        if inside_order:
-            if child_ids:
-                total=sum(map_weight(cid,True) for cid in child_ids)
-                n["mapWeight"]=max(float(n["weight"]),total)
-            else:n["mapWeight"]=float(n["weight"])
-            return n["mapWeight"]
-        if child_ids:
-            n["mapWeight"]=max(1.0,sum(map_weight(cid,False) for cid in child_ids))
-        else:n["mapWeight"]=float(n["weight"])
-        return n["mapWeight"]
+    memo={}
+    def propagated(nid):
+        if nid in memo:return memo[nid]
+        n=by[nid]
+        if n["rank"]=="ORDER":
+            v=float(n.get("inatAreaWeight",0.0))
+        else:
+            v=sum(propagated(c) for c in kids.get(nid,[]))
+        memo[nid]=v
+        return v
 
-    root_ids=[n["id"] for n in taxa if not n["parentId"] or n["parentId"] not in by_id]
-    for rid in root_ids: map_weight(rid)
+    def internal(nid):
+        n=by[nid];cs=kids.get(nid,[])
+        if not cs:n["mapWeight"]=1.0;return 1.0
+        total=sum(internal(c) for c in cs)
+        n["mapWeight"]=max(1.0,total);return n["mapWeight"]
+
+    for n in orders:
+        for c in kids.get(n["id"],[]):internal(c)
+        n["mapWeight"]=max(.01,float(n.get("inatAreaWeight",0.0)))
+
+    root_ids=[n["id"] for n in taxa if not n["parentId"] or n["parentId"] not in by]
+    for rid in root_ids:
+        stack=[rid]
+        while stack:
+            nid=stack.pop();node=by[nid]
+            if node["rank"]!="ORDER":node["mapWeight"]=max(.01,propagated(nid))
+            stack.extend(kids.get(nid,[]))
 
     payload={"meta":{
-      "source":"Catalogue of Life eXtended Release via GBIF Species API",
-      "areaSource":"iNaturalist observation counts at ORDER rank",
-      "areaFormula":"max(1, observation_count) ** log10(2)",
-      "areaInterpretation":"10x observations = 2x order-level area",
-      "generatedAt":time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime()),
-      "taxa":len(taxa),
-      "roots":[{"name":r.get("canonicalName") or r.get("scientificName"),"rank":r.get("rank"),"key":r.get("key")} for r in roots]
-    },"taxa":taxa}
-    target=ROOT/"data"/"taxa.json"
-    target.write_text(json.dumps(payload,ensure_ascii=False,separators=(",",":")),encoding="utf-8")
-    print(f"Wrote {len(taxa)} taxa to {target}")
+      "source":"COL XR via GBIF","areaSource":"iNaturalist ORDER observation counts",
+      "areaFormula":"N ** log10(2); 10x observations = 2x area",
+      "sampling":"balanced per root; no high-rank child truncation",
+      "generatedAt":time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime()),"taxa":len(taxa),
+      "roots":[{"name":r.get("canonicalName"),"rank":r.get("rank"),"key":r.get("key")} for r in roots]},
+      "taxa":taxa}
+    (ROOT/"data"/"taxa.json").write_text(json.dumps(payload,ensure_ascii=False,separators=(",",":")),encoding="utf-8")
+    print("Root weights:",[(by[rid]["canonicalName"],by[rid]["mapWeight"]) for rid in root_ids],flush=True)
 
 if __name__=="__main__":main()
