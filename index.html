@@ -60,7 +60,7 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 <g id="halos"></g><g id="regions"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>compact landschap · geen overlap · klassen extra compact</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>order-first · ≤15% open ruimte op elk niveau</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -744,6 +744,439 @@ function computeRecursiveCoverage(){
 }
 computeRecursiveCoverage();
 
+
+/* ======================================================================
+   v23 ORDER-FIRST ENGINE
+   ----------------------------------------------------------------------
+   - ORDER is the anchor rank.
+   - Above ORDER, every weight is the sum of descendant ORDER weights.
+   - Below ORDER, layout continues top-down with the native taxon weights.
+   - Every sibling partition covers its parent exactly; each visible child
+     occupies ~85% of its allocation cell, so open space is ~15%.
+   - Parents above ORDER are then rebuilt bottom-up around their children.
+   - Allocation cells never overlap, so the visible taxa cannot overlap.
+   ====================================================================== */
+
+(function rebuildOrderFirst(){
+  const RANK_LEVEL={
+    ROOT:-1,DOMAIN:0,KINGDOM:1,PHYLUM:2,CLASS:3,ORDER:4,
+    FAMILY:5,GENUS:6,SPECIES:7
+  };
+  const rankLevel=t=>RANK_LEVEL[(t?.rank||'').toUpperCase()] ?? 99;
+
+  /* ---------- order-derived weights ---------- */
+  const anchorWeight=new Map();
+
+  function computeAnchorWeight(t){
+    const id=String(t.id);
+    if(anchorWeight.has(id))return anchorWeight.get(id);
+
+    const rank=(t.rank||'').toUpperCase();
+    if(rank==='ORDER'){
+      const w=weight(t);
+      anchorWeight.set(id,w);
+      return w;
+    }
+
+    const cs=children.get(id)||[];
+    let s=0;
+    for(const c of cs)s+=computeAnchorWeight(c);
+
+    /* Some lineages do not use ORDER in the source taxonomy.
+       They keep their own dataset weight rather than disappearing. */
+    if(s<=0)s=weight(t);
+
+    anchorWeight.set(id,s);
+    return s;
+  }
+  for(const t of taxa)computeAnchorWeight(t);
+
+  function layoutWeight(t){
+    /* Everything above ORDER is determined by descendant orders. */
+    return rankLevel(t)<=4
+      ? Math.max(.0001,anchorWeight.get(String(t.id))||weight(t))
+      : weight(t);
+  }
+
+  /* ---------- polygon partition ---------- */
+  function clipAxis(poly,axis,cut,keepLow){
+    const value=p=>axis==='x'?p.x:p.y;
+    const inside=p=>keepLow?value(p)<=cut+1e-8:value(p)>=cut-1e-8;
+    const out=[];
+
+    for(let i=0;i<poly.length;i++){
+      const a=poly[i],b=poly[(i+1)%poly.length];
+      const va=value(a),vb=value(b);
+      const ia=inside(a),ib=inside(b);
+
+      if(ia)out.push({x:a.x,y:a.y});
+
+      if(ia!==ib){
+        const den=vb-va;
+        const u=Math.abs(den)<1e-12?0:(cut-va)/den;
+        out.push({
+          x:a.x+(b.x-a.x)*u,
+          y:a.y+(b.y-a.y)*u
+        });
+      }
+    }
+    return cleanPoly(out);
+  }
+
+  function cutForArea(poly,axis,fraction){
+    const b=polyBBox(poly);
+    let lo=axis==='x'?b.x:b.y;
+    let hi=axis==='x'?b.x+b.w:b.y+b.h;
+    const target=absArea(poly)*fraction;
+
+    for(let k=0;k<44;k++){
+      const mid=(lo+hi)/2;
+      const q=clipAxis(poly,axis,mid,true);
+      const a=q.length>=3?absArea(q):0;
+      if(a<target)lo=mid; else hi=mid;
+    }
+    return (lo+hi)/2;
+  }
+
+  function balancedSplit(items){
+    const sorted=[...items].sort((a,b)=>layoutWeight(b)-layoutWeight(a));
+    const A=[],B=[];
+    let wa=0,wb=0;
+
+    for(const t of sorted){
+      if(wa<=wb){A.push(t);wa+=layoutWeight(t)}
+      else{B.push(t);wb+=layoutWeight(t)}
+    }
+
+    if(!A.length||!B.length){
+      const m=Math.ceil(sorted.length/2);
+      return [sorted.slice(0,m),sorted.slice(m)];
+    }
+    return [A,B];
+  }
+
+  function partitionCells(poly,items,seed,depth=0,out=new Map()){
+    if(!items.length)return out;
+
+    if(items.length===1){
+      out.set(String(items[0].id),cleanPoly(poly));
+      return out;
+    }
+
+    const [A,B]=balancedSplit(items);
+    const wa=A.reduce((s,t)=>s+layoutWeight(t),0);
+    const wb=B.reduce((s,t)=>s+layoutWeight(t),0);
+    const fraction=wa/(wa+wb);
+
+    const box=polyBBox(poly);
+    let axis;
+    if(box.w>box.h*1.20)axis='x';
+    else if(box.h>box.w*1.20)axis='y';
+    else axis=h2(seed,depth*101+items.length)>.5?'x':'y';
+
+    let cut=cutForArea(poly,axis,fraction);
+    let pA=clipAxis(poly,axis,cut,true);
+    let pB=clipAxis(poly,axis,cut,false);
+
+    if(pA.length<3||pB.length<3){
+      axis=axis==='x'?'y':'x';
+      cut=cutForArea(poly,axis,fraction);
+      pA=clipAxis(poly,axis,cut,true);
+      pB=clipAxis(poly,axis,cut,false);
+    }
+
+    partitionCells(pA,A,seed+'L',depth+1,out);
+    partitionCells(pB,B,seed+'R',depth+1,out);
+    return out;
+  }
+
+  /* ---------- shape inside a cell: target 85% area ---------- */
+  function angularStyle(t,a){
+    const name=String(t.canonicalName||'').toLowerCase();
+    const rank=(t.rank||'').toUpperCase();
+
+    if(rank==='ORDER'&&name==='passeriformes'){
+      /* Flying-swallow-like: beak/head right, broad wings, forked tail. */
+      const head=Math.exp(-Math.pow((Math.atan2(Math.sin(a),Math.cos(a)))/.42,2));
+      const wing1=Math.exp(-Math.pow((a-2.05)/.38,2));
+      const wing2=Math.exp(-Math.pow((a+2.05)/.38,2));
+      const tailNotch=Math.exp(-Math.pow((Math.abs(a)-Math.PI)/.20,2));
+      const tailLobes=
+        Math.exp(-Math.pow((a-2.82)/.18,2))+
+        Math.exp(-Math.pow((a+2.82)/.18,2));
+      return .84+.10*head+.105*(wing1+wing2)+.08*tailLobes-.13*tailNotch;
+    }
+
+    if(rank==='ORDER'&&name==='lepidoptera'){
+      /* Four-wing butterfly rhythm, narrow between wing lobes. */
+      return .80+.16*Math.abs(Math.sin(2*a))+.025*Math.cos(6*a);
+    }
+
+    if(rank==='ORDER'&&name==='coleoptera'){
+      return .86+.055*Math.cos(2*a)+.025*Math.cos(5*a);
+    }
+
+    /* Generic organic island. */
+    return .885
+      +.035*Math.sin(2*a+6.28*h2(t.id,17100))
+      +.025*Math.sin(5*a+6.28*h2(t.id,17200))
+      +.015*Math.sin(9*a+6.28*h2(t.id,17300));
+  }
+
+  function shapeFromCell(cell,t,target=.85){
+    if(!cell||cell.length<3)return cell;
+
+    const c=polygonCentroid(cell);
+    const base=cell.map((p,i)=>{
+      const a=Math.atan2(p.y-c.y,p.x-c.x);
+      const f=Math.max(.66,Math.min(.975,
+        angularStyle(t,a)+.012*(h2(t.id,18000+i)-.5)
+      ));
+      return {p,a,f};
+    });
+
+    const targetArea=absArea(cell)*target;
+    let lo=.70,hi=1.18,best=null;
+
+    for(let k=0;k<34;k++){
+      const m=(lo+hi)/2;
+      const q=base.map(o=>{
+        const f=Math.min(.995,o.f*m);
+        return{
+          x:c.x+(o.p.x-c.x)*f,
+          y:c.y+(o.p.y-c.y)*f
+        };
+      });
+      const a=absArea(q);
+      best=q;
+      if(a<targetArea)lo=m; else hi=m;
+    }
+    return cleanPoly(best);
+  }
+
+  /* ---------- top-level world allocation ----------
+     Four non-overlapping cells; all areas come from order-derived weights.
+     Root shapes occupy 85% of those cells, giving real ocean between realms. */
+  const top=(children.get(String(roots[0].id))||[])
+    .filter(t=>t&&t.id!=='__life');
+
+  const byName=new Map(top.map(t=>[t.canonicalName,t]));
+  const plant=byName.get('Plantae');
+  const animal=byName.get('Animalia');
+  const fungi=byName.get('Fungi');
+  const bacteria=byName.get('Bacteria');
+
+  const worldPoly=[
+    {x:4,y:4},{x:2396,y:4},{x:2396,y:1496},{x:4,y:1496}
+  ];
+
+  /* If the familiar four groups exist, keep the readable 2x2 geography,
+     but calculate every split from aggregate ORDER weight. */
+  const rootCells=new Map();
+
+  if(plant&&animal&&fungi&&bacteria){
+    const left=[plant,fungi],right=[animal,bacteria];
+    const wLeft=left.reduce((s,t)=>s+layoutWeight(t),0);
+    const wRight=right.reduce((s,t)=>s+layoutWeight(t),0);
+    const xCut=cutForArea(worldPoly,'x',wLeft/(wLeft+wRight));
+
+    const leftPoly=clipAxis(worldPoly,'x',xCut,true);
+    const rightPoly=clipAxis(worldPoly,'x',xCut,false);
+
+    const lp=layoutWeight(plant),lf=layoutWeight(fungi);
+    const ra=layoutWeight(animal),rb=layoutWeight(bacteria);
+
+    const yLeft=cutForArea(leftPoly,'y',lp/(lp+lf));
+    const yRight=cutForArea(rightPoly,'y',ra/(ra+rb));
+
+    rootCells.set(String(plant.id),clipAxis(leftPoly,'y',yLeft,true));
+    rootCells.set(String(fungi.id),clipAxis(leftPoly,'y',yLeft,false));
+    rootCells.set(String(animal.id),clipAxis(rightPoly,'y',yRight,true));
+    rootCells.set(String(bacteria.id),clipAxis(rightPoly,'y',yRight,false));
+
+    /* Any unexpected extra root gets a tiny fallback cell later. */
+  }else{
+    partitionCells(worldPoly,top,'WORLD',0,rootCells);
+  }
+
+  /* Reset all geometry from the earlier engine. */
+  for(const t of taxa){
+    if(t.id==='__life')continue;
+    t.poly=null;
+    t.cellPoly=null;
+  }
+
+  /* ---------- recursive allocation ----------
+     Above ORDER: allocation weight is the sum of orders.
+     ORDER itself is the first semantic "leaf".
+     Below ORDER: continue top-down with ordinary weights. */
+  function layoutSubtree(t,cell,coverage=.85){
+    t.cellPoly=cleanPoly(cell);
+    t.poly=shapeFromCell(t.cellPoly,t,coverage);
+
+    const cs=children.get(String(t.id))||[];
+    if(!cs.length)return;
+
+    const childCells=partitionCells(t.poly,cs,String(t.id),0,new Map());
+
+    for(const c of cs){
+      const cc=childCells.get(String(c.id));
+      if(cc&&cc.length>=3)layoutSubtree(c,cc,.85);
+    }
+  }
+
+  for(const t of top){
+    let cell=rootCells.get(String(t.id));
+    if(!cell){
+      /* Small fallback for uncommon extra roots. */
+      const b=polyBBox(worldPoly);
+      const s=110+70*h2(t.id,19000);
+      const cx=b.x+b.w*(.2+.6*h2(t.id,19001));
+      const cy=b.y+b.h*(.2+.6*h2(t.id,19002));
+      cell=[
+        {x:cx-s,y:cy-s*.7},{x:cx+s,y:cy-s*.7},
+        {x:cx+s,y:cy+s*.7},{x:cx-s,y:cy+s*.7}
+      ];
+    }
+    layoutSubtree(t,cell,.85);
+  }
+
+  /* ---------- bottom-up rebuild ABOVE order ----------
+     Children already occupy ~85% of the parent.  Rebuild the parent's
+     outline from those children, but clip it to the original allocation
+     cell so siblings remain non-overlapping. */
+  function convexClip(subject,clip){
+    if(subject.length<3||clip.length<3)return subject;
+
+    const orient=polygonArea(clip)>=0?1:-1;
+    let output=subject.slice();
+
+    for(let i=0;i<clip.length;i++){
+      const A=clip[i],B=clip[(i+1)%clip.length];
+      const inside=P=>{
+        const cross=(B.x-A.x)*(P.y-A.y)-(B.y-A.y)*(P.x-A.x);
+        return orient*cross>=-1e-7;
+      };
+
+      const input=output;
+      output=[];
+      if(!input.length)break;
+
+      for(let j=0;j<input.length;j++){
+        const P=input[j],Q=input[(j+1)%input.length];
+        const iP=inside(P),iQ=inside(Q);
+
+        if(iP)output.push(P);
+
+        if(iP!==iQ){
+          const dx=Q.x-P.x,dy=Q.y-P.y;
+          const ex=B.x-A.x,ey=B.y-A.y;
+          const den=dx*ey-dy*ex;
+          if(Math.abs(den)>1e-10){
+            const u=((A.x-P.x)*ey-(A.y-P.y)*ex)/den;
+            output.push({x:P.x+u*dx,y:P.y+u*dy});
+          }
+        }
+      }
+      output=cleanPoly(output);
+    }
+    return output;
+  }
+
+  function hull(points){
+    if(points.length<4)return points.slice();
+    const pts=points.slice().sort((a,b)=>a.x===b.x?a.y-b.y:a.x-b.x);
+    const cross=(o,a,b)=>(a.x-o.x)*(b.y-o.y)-(a.y-o.y)*(b.x-o.x);
+    const lo=[],hi=[];
+
+    for(const p of pts){
+      while(lo.length>=2&&cross(lo[lo.length-2],lo[lo.length-1],p)<=0)lo.pop();
+      lo.push(p);
+    }
+    for(let i=pts.length-1;i>=0;i--){
+      const p=pts[i];
+      while(hi.length>=2&&cross(hi[hi.length-2],hi[hi.length-1],p)<=0)hi.pop();
+      hi.push(p);
+    }
+    lo.pop();hi.pop();
+    return lo.concat(hi);
+  }
+
+  function rebuildParentFromChildren(t){
+    const cs=(children.get(String(t.id))||[])
+      .filter(c=>c.poly&&c.poly.length>=3);
+    if(!cs.length||!t.cellPoly)return;
+
+    const cloud=[];
+    for(const c of cs)for(const p of c.poly)cloud.push(p);
+    if(cloud.length<3)return;
+
+    let env=hull(cloud);
+    if(env.length<3)return;
+
+    const childArea=cs.reduce((s,c)=>s+absArea(c.poly),0);
+    const targetArea=childArea/.85;
+    const ctr=polygonCentroid(env);
+
+    /* Expand the child hull toward the exact 85% coverage target. */
+    let lo=1,hi=2,best=env;
+    for(let k=0;k<30;k++){
+      const m=(lo+hi)/2;
+      let q=env.map(p=>({
+        x:ctr.x+(p.x-ctr.x)*m,
+        y:ctr.y+(p.y-ctr.y)*m
+      }));
+
+      q=convexClip(q,t.cellPoly);
+      if(q.length<3){hi=m;continue}
+
+      best=q;
+      if(absArea(q)<targetArea)lo=m; else hi=m;
+    }
+
+    if(best&&best.length>=3)t.poly=cleanPoly(best);
+  }
+
+  const bottomUp=[...taxa]
+    .filter(t=>t.id!=='__life'&&t.poly)
+    .sort((a,b)=>rankLevel(b)-rankLevel(a));
+
+  for(const t of bottomUp){
+    /* only above ORDER; ORDER is the anchor geometry */
+    if(rankLevel(t)<4)rebuildParentFromChildren(t);
+  }
+
+  /* ---------- diagnostics ---------- */
+  function trueWorldLandFraction(){
+    const rootsNow=top.filter(t=>t.poly&&t.poly.length>=3);
+    const NX=190,NY=118;
+    let land=0,total=NX*NY;
+
+    for(let iy=0;iy<NY;iy++){
+      const y=(iy+.5)*1500/NY;
+      for(let ix=0;ix<NX;ix++){
+        const x=(ix+.5)*2400/NX;
+        let hit=false;
+        for(const t of rootsNow){
+          if(pointInPoly({x,y},t.poly)){hit=true;break}
+        }
+        if(hit)land++;
+      }
+    }
+    return land/total;
+  }
+
+  payload.meta=payload.meta||{};
+  payload.meta.worldLandFraction=trueWorldLandFraction();
+
+  /* Recompute local coverage using the new geometry. */
+  computeRecursiveCoverage();
+
+  let orderCount=0;
+  for(const t of taxa)if((t.rank||'').toUpperCase()==='ORDER'&&t.poly)orderCount++;
+  payload.meta.orderFirstCount=orderCount;
+})();
+
 function pathFromPoly(poly){
   if(!poly||poly.length<3)return'';
   const mids=poly.map((p,i)=>{const q=poly[(i+1)%poly.length];return{x:(p.x+q.x)/2,y:(p.y+q.y)/2}});
@@ -806,9 +1239,9 @@ function anim(){let k=.16;view.x+=(target.x-view.x)*k;view.y+=(target.y-view.y)*
   const landPct=Math.max(0,Math.min(100,100*(payload.meta.worldLandFraction||0)));
   const openPct=100-landPct;
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
-  status.textContent=`${payload.meta.taxa||taxa.length} taxa · wereld open ${openPct.toFixed(1)}% · oceaangap ${payload.meta.rootOceanGap||0} · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
+  status.textContent=`${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v22 rank-aware world land fraction',payload.meta.worldLandFraction);
+console.log('Atlas v23 order-first world land fraction',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
