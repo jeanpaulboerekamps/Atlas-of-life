@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — taxonomische kleurtrappen v29</title>
+<title>Atlas of Life — vloeiende taxonomische kleurtrappen v30</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -11,7 +11,7 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--sea);
 svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-select:none;-webkit-user-select:none}
 .sea{fill:url(#oceanGradient)}
 .grid{fill:none;stroke:#d7f4fb;stroke-width:2;opacity:.10;vector-effect:non-scaling-stroke}
-.taxonPath{cursor:pointer;stroke:#171512;stroke-opacity:.82;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke;transition:opacity .18s,filter .12s;filter:drop-shadow(0 1px 1px #052b3a20)}
+.taxonPath{cursor:pointer;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke;transition:opacity .18s,filter .12s;filter:drop-shadow(0 1px 1px #052b3a14)}
 .taxonPath:hover{filter:brightness(1.045)}
 .continentHaloWide,.continentHaloNear{display:none}
 .label{font-weight:760;fill:#18372f;pointer-events:none;paint-order:stroke;stroke:#fffdf8e8;stroke-width:2.4px;stroke-linejoin:round}
@@ -59,7 +59,7 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 <g id="halos"></g><g id="regions"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v29 · kleur per niveau · orden 50%</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v30 · vloeiende kleurniveaus · orden 50%</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -125,6 +125,54 @@ function colorFor(t){
   const palette=levelPalettes[rootName];
   if(palette&&level!==undefined)return palette[level];
   return rankFallback[r]||'#a9cdb9';
+}
+
+function mixHex(a,b,t){
+  const av=parseInt(a.slice(1),16),bv=parseInt(b.slice(1),16);
+  const ar=av>>16,ag=(av>>8)&255,ab=av&255;
+  const br=bv>>16,bg=(bv>>8)&255,bb=bv&255;
+  const c=x=>Math.max(0,Math.min(255,Math.round(x))).toString(16).padStart(2,'0');
+  return'#'+c(ar+(br-ar)*t)+c(ag+(bg-ag)*t)+c(ab+(bb-ab)*t);
+}
+
+const gradientCache=new Map();
+function levelNumber(t){
+  return{DOMAIN:0,KINGDOM:0,PHYLUM:1,CLASS:2,ORDER:3,FAMILY:4,GENUS:5,SPECIES:6}[(t.rank||'').toUpperCase()];
+}
+function edgeColorFor(t){
+  const root=rootAncestor(t);
+  const palette=levelPalettes[root?.canonicalName];
+  const level=levelNumber(t);
+  if(!palette||level===undefined)return colorFor(t);
+  return level===0?'#22a7d4':palette[level-1];
+}
+function fillFor(t){
+  const root=rootAncestor(t);
+  const rootName=root?.canonicalName;
+  const palette=levelPalettes[rootName];
+  const level=levelNumber(t);
+  if(!palette||level===undefined)return colorFor(t);
+
+  const key=rootName+'-'+level;
+  if(!gradientCache.has(key)){
+    const own=palette[level],edge=level===0?'#22a7d4':palette[level-1];
+    const id='level-gradient-'+rootName.toLowerCase()+'-'+level;
+    const gradient=document.createElementNS(NS,'radialGradient');
+    gradient.setAttribute('id',id);
+    gradient.setAttribute('cx','50%');gradient.setAttribute('cy','48%');
+    gradient.setAttribute('r','52%');gradient.setAttribute('fx','48%');gradient.setAttribute('fy','46%');
+    for(const [offset,colour] of [
+      ['0%',own],['48%',own],['72%',mixHex(own,edge,.28)],
+      ['88%',mixHex(own,edge,.68)],['100%',edge]
+    ]){
+      const stop=document.createElementNS(NS,'stop');
+      stop.setAttribute('offset',offset);stop.setAttribute('stop-color',colour);
+      gradient.appendChild(stop);
+    }
+    svg.querySelector('defs').appendChild(gradient);
+    gradientCache.set(key,id);
+  }
+  return'url(#'+gradientCache.get(key)+')';
 }
 
 function polygonArea(poly){let a=0;for(let i=0;i<poly.length;i++){const p=poly[i],q=poly[(i+1)%poly.length];a+=p.x*q.y-q.x*p.y}return a/2}
@@ -1335,7 +1383,7 @@ const elems=[];
     const haloNear=document.createElementNS(NS,'path');
     haloNear.setAttribute('d',pathFromPoly(t.poly));haloNear.setAttribute('class','continentHaloNear');haloNear.setAttribute('stroke-width','12');hg.appendChild(haloNear);
   }
-  const p=document.createElementNS(NS,'path');p.setAttribute('d',pathFromPoly(t.poly));p.setAttribute('fill',colorFor(t));p.setAttribute('fill-opacity','.97');p.setAttribute('class','taxonPath');p.setAttribute('filter','url(#landTexture)');p.setAttribute('stroke-width','1.35');p.dataset.minz=minZoom(t);p.dataset.id=t.id;p.onclick=e=>{e.stopPropagation();focus(t)};rg.appendChild(p);
+  const p=document.createElementNS(NS,'path');p.setAttribute('d',pathFromPoly(t.poly));p.setAttribute('fill',fillFor(t));p.setAttribute('fill-opacity','.98');p.setAttribute('class','taxonPath');p.setAttribute('filter','url(#landTexture)');p.setAttribute('stroke',edgeColorFor(t));p.setAttribute('stroke-opacity','.34');p.setAttribute('stroke-width','1.05');p.dataset.minz=minZoom(t);p.dataset.id=t.id;p.onclick=e=>{e.stopPropagation();focus(t)};rg.appendChild(p);
   const text=document.createElementNS(NS,'text');text.setAttribute('x',t.center.x);text.setAttribute('y',t.center.y);text.setAttribute('text-anchor','middle');text.setAttribute('class','label');text.textContent=t.vernacularName||t.canonicalName;text.dataset.minz=(minZoom(t)*1.02);text.dataset.id=t.id;lg.appendChild(text);
   elems.push({t,p,text})
 });
@@ -1375,7 +1423,7 @@ function anim(){let k=.16;view.x+=(target.x-view.x)*k;view.y+=(target.y-view.y)*
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
   status.textContent=`${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v29 · taxonomic level palettes · kingdoms/phyla/classes 70% land · orders 50% land',payload.meta.worldLandFraction);
+console.log('Atlas v30 · smoothly blended taxonomic level palettes · kingdoms/phyla/classes 70% land · orders 50% land',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
