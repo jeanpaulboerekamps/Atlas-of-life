@@ -60,7 +60,7 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 <g id="halos"></g><g id="regions"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>levend landschap · iNaturalist-gewogen taxonomie</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>compact landschap · maximaal 15% open ruimte</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -243,7 +243,7 @@ function resolveCollisions(items,parentPoly,parentCenter){
       for(let j=0;j<items.length;j++)if(i!==j){
         const b=items[j],dx=a.x-b.x,dy=a.y-b.y;
         const d=Math.hypot(dx,dy)||.001;
-        const min=(a.bound+b.bound)*1.006;
+        const min=(a.bound+b.bound)*.985;
         if(d<min){
           const push=(min-d)*.19;
           fx+=dx/d*push;fy+=dy/d*push;
@@ -279,7 +279,7 @@ function packChildren(parentPoly,items,depth,parentId){
   const total=items.reduce((s,t)=>s+weight(t),0);
 
   /* More dense than v15, but still leaves open water channels. */
-  const fillRatio=depth<=1?.82:depth===2?.86:depth===3?.89:.91;
+  const fillRatio=depth<=1?.94:depth===2?.95:depth===3?.95:.95;
   const usable=Math.max(1,area*fillRatio);
 
   const packed=items.map((t,i)=>{
@@ -312,7 +312,7 @@ function packChildren(parentPoly,items,depth,parentId){
       if(!ellipseFits(parentPoly,packed[i].x,packed[i].y,packed[i].rx,packed[i].ry)){bad=true;break}
       for(let j=i+1;j<packed.length;j++){
         if(Math.hypot(packed[i].x-packed[j].x,packed[i].y-packed[j].y)<
-           (packed[i].bound+packed[j].bound)*.992){bad=true;break}
+           (packed[i].bound+packed[j].bound)*.965){bad=true;break}
       }
     }
     if(!bad)break;
@@ -409,7 +409,7 @@ function layoutRootContinents(){
           const b=items[j];
           const dx=a.x-b.x,dy=a.y-b.y;
           const d=Math.hypot(dx,dy)||.001;
-          const min=(a.bound+b.bound)*.91;  // close, slightly interlocking appearance
+          const min=(a.bound+b.bound)*.80;  // close, slightly interlocking appearance
           if(d<min){
             const push=(min-d)*.15;
             fx+=dx/d*push;fy+=dy/d*push;
@@ -432,7 +432,7 @@ function layoutRootContinents(){
       if(a.x-a.rx<10||a.x+a.rx>2390||a.y-a.ry<10||a.y+a.ry>1490){bad=true;break}
       for(let j=i+1;j<items.length;j++){
         const b=items[j];
-        if(Math.hypot(a.x-b.x,a.y-b.y)<(a.bound+b.bound)*.88){bad=true;break}
+        if(Math.hypot(a.x-b.x,a.y-b.y)<(a.bound+b.bound)*.77){bad=true;break}
       }
       if(bad)break;
     }
@@ -454,6 +454,48 @@ function layoutRootContinents(){
   }
 }
 layoutRootContinents();
+
+/* v19 hard rule: at world level, open water must not exceed 15%.
+   We iteratively enlarge the four top-level continents around their own
+   centroids until their summed polygon area reaches at least 85% of the
+   2400x1500 world canvas.  Scaling is capped per step to keep the layout stable. */
+function scalePolyAbout(poly,c,f){
+  return poly.map(p=>({x:c.x+(p.x-c.x)*f,y:c.y+(p.y-c.y)*f}));
+}
+function topLevelLandFraction(){
+  const rootsNow=(children.get(String(roots[0].id))||[]).filter(t=>t.poly&&t.poly.length>=3);
+  const worldArea=2400*1500;
+  const land=rootsNow.reduce((s,t)=>s+absArea(t.poly),0);
+  return land/worldArea;
+}
+(function enforceWorldCoverage(){
+  const top=(children.get(String(roots[0].id))||[]).filter(t=>t.poly&&t.poly.length>=3);
+  const target=.85;
+  let frac=topLevelLandFraction();
+
+  for(let round=0;round<18 && frac<target;round++){
+    /* theoretical scale needed if there were no clipping */
+    const desired=Math.sqrt(target/Math.max(.001,frac));
+    const f=Math.min(1.055,Math.max(1.008,desired));
+
+    for(const t of top){
+      const c=polygonCentroid(t.poly);
+      let grown=scalePolyAbout(t.poly,c,f);
+
+      /* Clamp to the world rectangle with a 6px safety margin. */
+      grown=grown.map(p=>({
+        x:Math.max(6,Math.min(2394,p.x)),
+        y:Math.max(6,Math.min(1494,p.y))
+      }));
+      t.poly=cleanPoly(grown);
+      t.cellPoly=t.poly;
+    }
+    frac=topLevelLandFraction();
+  }
+
+  payload.meta=payload.meta||{};
+  payload.meta.worldLandFraction=frac;
+})();
 
 /* v18.2 SAFE: rebuild only high-level parent coastlines bottom-up. */
 function convexHull(points){
@@ -480,7 +522,7 @@ const depthSorted=[...taxa]
 
 for(const t of depthSorted){
   const cs=(children.get(String(t.id))||[]).filter(c=>c.poly&&c.poly.length>=3);
-  if(!cs.length||(t.depth||0)>2)continue;
+  if(!cs.length||(t.depth||0)>2||(t.depth||0)===0)continue;
 
   const cloud=[];
   for(const c of cs){
@@ -511,8 +553,8 @@ function pathFromPoly(poly){
 function minZoom(t){
   const d=Math.max(0,t.depth||0);
   const rank=(t.rank||'').toUpperCase();
-  const rankZ={DOMAIN:.8,KINGDOM:.8,PHYLUM:.9,CLASS:1.25,ORDER:1.9,FAMILY:3.3,GENUS:5.2,SPECIES:7.8};
-  return Math.max(rankZ[rank]||.95,.78+d*.34);
+  const rankZ={DOMAIN:.72,KINGDOM:.72,PHYLUM:.80,CLASS:1.10,ORDER:1.70,FAMILY:3.0,GENUS:4.8,SPECIES:7.2};
+  return Math.max(rankZ[rank]||.88,.70+d*.31);
 }
 
 const elems=[];
@@ -555,7 +597,12 @@ svg.onpointerdown=e=>{svg.setPointerCapture?.(e.pointerId);ptr.set(e.pointerId,{
 svg.onpointermove=e=>{if(!ptr.has(e.pointerId))return;ptr.set(e.pointerId,{x:e.clientX,y:e.clientY});if(ptr.size===2&&pinch){let p=[...ptr.values()],d=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y),sc=pinch.d/d,r=svg.getBoundingClientRect(),px=(pinch.cx-r.left)/r.width,py=(pinch.cy-r.top)/r.height,wx=pinch.v.x+px*pinch.v.w,wy=pinch.v.y+py*pinch.v.h;target.w=Math.max(24,Math.min(3000,pinch.v.w*sc));target.h=Math.max(15,Math.min(1900,pinch.v.h*sc));target.x=wx-px*target.w;target.y=wy-py*target.h}else if(drag){let dx=e.clientX-last.x,dy=e.clientY-last.y;target.x-=dx/innerWidth*target.w;target.y-=dy/innerHeight*target.h;last={x:e.clientX,y:e.clientY}}};
 function end(e){ptr.delete(e.pointerId);if(ptr.size<2)pinch=null;if(!ptr.size){drag=false;last=null}}svg.onpointerup=end;svg.onpointercancel=end;
 function anim(){let k=.16;view.x+=(target.x-view.x)*k;view.y+=(target.y-view.y)*k;view.w+=(target.w-view.w)*k;view.h+=(target.h-view.h)*k;svg.setAttribute('viewBox',`${view.x} ${view.y} ${view.w} ${view.h}`);let z=2400/view.w;zoomEl.textContent=z.toFixed(2)+'×';semantic(z);requestAnimationFrame(anim)}
-status.textContent=`${payload.meta.taxa||taxa.length} taxa · veilig landschap · meerdere lagen · orde-oppervlakte: iNaturalist · 10× = 2× ruimte`;
+{
+  const landPct=Math.max(0,Math.min(100,100*(payload.meta.worldLandFraction||0)));
+  const openPct=100-landPct;
+  status.textContent=`${payload.meta.taxa||taxa.length} taxa · land ${landPct.toFixed(1)}% · open ${openPct.toFixed(1)}% · iNaturalist: 10× = 2× ruimte`;
+}
+console.log('Atlas v19 world land fraction',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
