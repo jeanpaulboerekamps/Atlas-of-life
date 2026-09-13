@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — organic island map v12</title>
+<title>Atlas of Life — wild coast map v13</title>
 <style>
 :root{--sea:#dfece8;--ink:#17372f;--panel:#fffdf9ee;--muted:#60776e}
 *{box-sizing:border-box}
@@ -36,7 +36,7 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 <g id="regions"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>organische, iNaturalist-gewogen taxonomische kaart</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>wilde kusten · iNaturalist-gewogen taxonomische kaart</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -99,7 +99,7 @@ function cutVertices(poly,axis,cut){return poly.filter(p=>Math.abs((axis==='x'?p
 function farthestPair(points){if(points.length<2)return null;let best=null,dmax=-1;for(let i=0;i<points.length;i++)for(let j=i+1;j<points.length;j++){let d=(points[i].x-points[j].x)**2+(points[i].y-points[j].y)**2;if(d>dmax){dmax=d;best=[points[i],points[j]]}}return best}
 function wavyDivider(a,b,axis,seed,parentBox,depth){
   const pts=[],N=10,len=Math.hypot(b.x-a.x,b.y-a.y);
-  const baseAmp=Math.min(len*(depth<2?.08:.06),Math.min(parentBox.w,parentBox.h)*(depth<2?.055:.04));
+  const baseAmp=Math.min(len*(depth<2?.105:.078),Math.min(parentBox.w,parentBox.h)*(depth<2?.072:.052));
   const amp=baseAmp*(.7+.5*h2(seed,771)),phase=2*Math.PI*h2(seed,772),second=.28+.25*h2(seed,773);
   for(let i=0;i<=N;i++){
     const t=i/N,envelope=Math.sin(Math.PI*t);
@@ -129,22 +129,114 @@ function splitItems(items){
 
 function organicInset(poly,t,depth){
   if(!poly||poly.length<3)return poly;
-  const c=polygonCentroid(poly),b=polyBBox(poly),rank=(t?.rank||'').toUpperCase();
-  const gapByRank={DOMAIN:.085,KINGDOM:.085,PHYLUM:.072,CLASS:.060,ORDER:.050,FAMILY:.042,GENUS:.034,SPECIES:.028};
-  const gap=gapByRank[rank] ?? Math.max(.028,.075-depth*.007);
-  let q=poly.map((p,i)=>{const local=gap*(.72+.5*h2(t?.id||'root',900+i));return{x:p.x+(c.x-p.x)*local,y:p.y+(c.y-p.y)*local}});
+
+  const c=polygonCentroid(poly);
+  const b=polyBBox(poly);
+  const rank=(t?.rank||'').toUpperCase();
+
+  /* Higher levels get broader seas and more dramatic coastlines.
+     Lower levels keep smaller margins so tiny taxa remain usable. */
+  const gapByRank={
+    DOMAIN:.090,KINGDOM:.090,PHYLUM:.078,CLASS:.066,
+    ORDER:.056,FAMILY:.046,GENUS:.038,SPECIES:.031
+  };
+  const baseGap=gapByRank[rank] ?? Math.max(.030,.082-depth*.007);
+
+  /* First make the original vertices irregular: some become capes
+     (small inset), others retreat strongly and become bays. All movement
+     is toward the centroid, so the new coast remains inside its ownership cell. */
+  const anchors=poly.map((p,i)=>{
+    const cape=h2(t?.id||'root',2000+i);
+    const bay=h2(t?.id||'root',2300+i);
+    let factor;
+
+    if(cape>.79){
+      factor=baseGap*(.22+.28*h2(t?.id||'root',2500+i));   // cape
+    }else if(bay>.66){
+      factor=baseGap*(1.45+.95*h2(t?.id||'root',2700+i));  // deep bay
+    }else{
+      factor=baseGap*(.65+.85*h2(t?.id||'root',2900+i));
+    }
+
+    /* Keep very small polygons from collapsing. */
+    factor=Math.min(.30,Math.max(.008,factor));
+    return {
+      x:p.x+(c.x-p.x)*factor,
+      y:p.y+(c.y-p.y)*factor
+    };
+  });
+
   const out=[];
-  for(let i=0;i<q.length;i++){
-    const a=q[i],z=q[(i+1)%q.length];out.push(a);
-    const len=Math.hypot(z.x-a.x,z.y-a.y),scale=Math.max(30,Math.min(b.w,b.h));
-    const extra=Math.min(4,Math.floor(len/Math.max(60,scale*.22)));
+
+  /* Insert several points per edge. Each inserted point independently becomes
+     either a shallow headland or a deep indentation. This gives a much more
+     Earth-like coastline while never pushing outside the partition cell. */
+  for(let i=0;i<anchors.length;i++){
+    const a=anchors[i],z=anchors[(i+1)%anchors.length];
+    out.push(a);
+
+    const edgeLen=Math.hypot(z.x-a.x,z.y-a.y);
+    const localScale=Math.max(24,Math.min(b.w,b.h));
+
+    /* Long edges get more coastline detail. */
+    const extra=Math.max(
+      1,
+      Math.min(7,Math.floor(edgeLen/Math.max(42,localScale*.14)))
+    );
+
     for(let k=1;k<=extra;k++){
-      const u=k/(extra+1);let x=a.x+(z.x-a.x)*u,y=a.y+(z.y-a.y)*u;
-      const pull=(.015+.035*h2(t?.id||'root',1000+i*7+k))*Math.min(b.w,b.h);
-      const dx=c.x-x,dy=c.y-y,d=Math.hypot(dx,dy)||1;x+=dx/d*pull;y+=dy/d*pull;out.push({x,y})
+      const u=k/(extra+1);
+
+      let x=a.x+(z.x-a.x)*u;
+      let y=a.y+(z.y-a.y)*u;
+
+      const r1=h2(t?.id||'root',3200+i*31+k);
+      const r2=h2(t?.id||'root',3600+i*37+k);
+      const r3=h2(t?.id||'root',4000+i*41+k);
+
+      /* Multiple scales: ordinary roughness, occasional fjord, occasional cape. */
+      let pull;
+      if(r1>.86){
+        pull=(.070+.095*r2)*localScale;       // pronounced bay / fjord
+      }else if(r1<.16){
+        pull=(.004+.010*r2)*localScale;       // headland
+      }else{
+        pull=(.018+.050*r2)*localScale;       // normal rugged coast
+      }
+
+      /* Add a little tangential wandering as well, but keep it modest. */
+      const ex=z.x-a.x,ey=z.y-a.y,elen=Math.hypot(ex,ey)||1;
+      const tx=ex/elen,ty=ey/elen;
+      const wander=(r3-.5)*Math.min(edgeLen*.10,localScale*.055);
+
+      x+=tx*wander;
+      y+=ty*wander;
+
+      /* Crucially, the major displacement is only inward. */
+      const dx=c.x-x,dy=c.y-y,d=Math.hypot(dx,dy)||1;
+      x+=dx/d*pull;
+      y+=dy/d*pull;
+
+      out.push({x,y});
     }
   }
-  return cleanPoly(out)
+
+  /* A second deterministic erosion pass exaggerates a subset of bays.
+     Again: inward only, so no sibling overlap can be introduced here. */
+  const eroded=out.map((p,i)=>{
+    const r=h2(t?.id||'root',5000+i);
+    if(r<.74)return p;
+
+    const amount=(.010+.035*h2(t?.id||'root',5400+i))*Math.min(b.w,b.h);
+    const dx=c.x-p.x,dy=c.y-p.y,d=Math.hypot(dx,dy)||1;
+
+    return {
+      x:p.x+dx/d*amount,
+      y:p.y+dy/d*amount
+    };
+  });
+
+  return cleanPoly(eroded);
 }
 
 function partition(poly,items,depth,parentId){
@@ -211,7 +303,7 @@ svg.onpointerdown=e=>{svg.setPointerCapture?.(e.pointerId);ptr.set(e.pointerId,{
 svg.onpointermove=e=>{if(!ptr.has(e.pointerId))return;ptr.set(e.pointerId,{x:e.clientX,y:e.clientY});if(ptr.size===2&&pinch){let p=[...ptr.values()],d=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y),sc=pinch.d/d,r=svg.getBoundingClientRect(),px=(pinch.cx-r.left)/r.width,py=(pinch.cy-r.top)/r.height,wx=pinch.v.x+px*pinch.v.w,wy=pinch.v.y+py*pinch.v.h;target.w=Math.max(24,Math.min(3000,pinch.v.w*sc));target.h=Math.max(15,Math.min(1900,pinch.v.h*sc));target.x=wx-px*target.w;target.y=wy-py*target.h}else if(drag){let dx=e.clientX-last.x,dy=e.clientY-last.y;target.x-=dx/innerWidth*target.w;target.y-=dy/innerHeight*target.h;last={x:e.clientX,y:e.clientY}}};
 function end(e){ptr.delete(e.pointerId);if(ptr.size<2)pinch=null;if(!ptr.size){drag=false;last=null}}svg.onpointerup=end;svg.onpointercancel=end;
 function anim(){let k=.16;view.x+=(target.x-view.x)*k;view.y+=(target.y-view.y)*k;view.w+=(target.w-view.w)*k;view.h+=(target.h-view.h)*k;svg.setAttribute('viewBox',`${view.x} ${view.y} ${view.w} ${view.h}`);let z=2400/view.w;zoomEl.textContent=z.toFixed(2)+'×';semantic(z);requestAnimationFrame(anim)}
-status.textContent=`${payload.meta.taxa||taxa.length} taxa · organische eilanden · open ruimte · orde-oppervlakte: iNaturalist · 10× = 2× ruimte`;
+status.textContent=`${payload.meta.taxa||taxa.length} taxa · wilde kusten · open ruimte · orde-oppervlakte: iNaturalist · 10× = 2× ruimte`;
 home();requestAnimationFrame(anim);
 })();
 </script></body></html>
