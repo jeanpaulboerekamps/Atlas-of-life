@@ -60,7 +60,7 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 <g id="halos"></g><g id="regions"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>compact landschap · maximaal 15% open ruimte</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>compact landschap · ≤15% open ruimte op elk niveau</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -177,25 +177,26 @@ function organicBlob(cx,cy,rx,ry,id,detail=44){
   for(let i=0;i<detail;i++){
     const a=2*Math.PI*i/detail;
 
-    /* Stronger multi-scale irregularity: broad lobes plus smaller bays.
-       q never exceeds 1, so the polygon remains inside its collision ellipse. */
-    let q=.82
-      +.105*Math.sin(2*a+phase*.55)
-      +.075*Math.sin(3*a+phase)
-      +.052*Math.sin(5*a-phase*.72)
-      +.032*Math.sin(8*a+phase*1.6)
-      +.026*Math.sin(13*a-phase*.3)
-      +.040*(h2(id,7100+i)-.5);
+    /* v20: high-fill organic coast.
+       Broad lobes and bays remain, but the average radius is close to 1.
+       This means a 95% ellipse packing becomes roughly 85–90% real land. */
+    let q=.948
+      +.032*Math.sin(2*a+phase*.55)
+      +.026*Math.sin(3*a+phase)
+      +.020*Math.sin(5*a-phase*.72)
+      +.014*Math.sin(8*a+phase*1.6)
+      +.010*Math.sin(13*a-phase*.3)
+      +.014*(h2(id,7100+i)-.5);
 
     const bay=h2(id,7600+i);
-    if(bay>.82)q-=.075+.075*h2(id,7700+i);
-    if(bay<.08)q+=.035*h2(id,7800+i);
+    if(bay>.91)q-=.050+.025*h2(id,7700+i);
+    if(bay<.06)q+=.012*h2(id,7800+i);
 
-    q=Math.max(.56,Math.min(.985,q));
+    q=Math.max(.80,Math.min(.997,q));
 
-    const yWarp=.90
-      +.075*Math.sin(2*a+phase*.30)
-      +.035*Math.sin(4*a-phase*.2);
+    const yWarp=.985
+      +.020*Math.sin(2*a+phase*.30)
+      +.010*Math.sin(4*a-phase*.2);
 
     pts.push({
       x:cx+Math.cos(a)*rx*q,
@@ -235,15 +236,27 @@ function nudgeInside(poly,item,center){
   }
 }
 
+function ellipseRadiusToward(item,dx,dy){
+  const d=Math.hypot(dx,dy)||1;
+  const ux=dx/d,uy=dy/d;
+  return 1/Math.sqrt(
+    (ux*ux)/(item.rx*item.rx+1e-9) +
+    (uy*uy)/(item.ry*item.ry+1e-9)
+  );
+}
+function ellipsePairLimit(a,b,dx,dy){
+  return ellipseRadiusToward(a,dx,dy)+ellipseRadiusToward(b,-dx,-dy);
+}
+
 function resolveCollisions(items,parentPoly,parentCenter){
-  for(let pass=0;pass<170;pass++){
+  for(let pass=0;pass<230;pass++){
     for(let i=0;i<items.length;i++){
       const a=items[i];
       let fx=(parentCenter.x-a.x)*.0012,fy=(parentCenter.y-a.y)*.0012;
       for(let j=0;j<items.length;j++)if(i!==j){
         const b=items[j],dx=a.x-b.x,dy=a.y-b.y;
         const d=Math.hypot(dx,dy)||.001;
-        const min=(a.bound+b.bound)*.985;
+        const min=ellipsePairLimit(a,b,dx,dy)*1.006;
         if(d<min){
           const push=(min-d)*.19;
           fx+=dx/d*push;fy+=dy/d*push;
@@ -279,7 +292,7 @@ function packChildren(parentPoly,items,depth,parentId){
   const total=items.reduce((s,t)=>s+weight(t),0);
 
   /* More dense than v15, but still leaves open water channels. */
-  const fillRatio=depth<=1?.94:depth===2?.95:depth===3?.95:.95;
+  const fillRatio=depth<=1?.965:depth===2?.965:depth===3?.96:.955;
   const usable=Math.max(1,area*fillRatio);
 
   const packed=items.map((t,i)=>{
@@ -293,8 +306,8 @@ function packChildren(parentPoly,items,depth,parentId){
 
     /* Fibonacci-ish placement, but with stronger randomness */
     const ang=i*2.3999632297+2*Math.PI*h2(parentId,7300+i);
-    const radial=.35*Math.min(box.w,box.h)*Math.sqrt((i+.45)/(items.length+.25));
-    const wobble=.12*Math.min(box.w,box.h);
+    const radial=.29*Math.min(box.w,box.h)*Math.sqrt((i+.45)/(items.length+.25));
+    const wobble=.075*Math.min(box.w,box.h);
 
     return{
       t,rx,ry,bound:Math.max(rx,ry),
@@ -303,7 +316,7 @@ function packChildren(parentPoly,items,depth,parentId){
     };
   });
 
-  for(let round=0;round<9;round++){
+  for(let round=0;round<14;round++){
     for(const p of packed)nudgeInside(parentPoly,p,center);
     resolveCollisions(packed,parentPoly,center);
 
@@ -311,14 +324,17 @@ function packChildren(parentPoly,items,depth,parentId){
     for(let i=0;i<packed.length&&!bad;i++){
       if(!ellipseFits(parentPoly,packed[i].x,packed[i].y,packed[i].rx,packed[i].ry)){bad=true;break}
       for(let j=i+1;j<packed.length;j++){
-        if(Math.hypot(packed[i].x-packed[j].x,packed[i].y-packed[j].y)<
-           (packed[i].bound+packed[j].bound)*.965){bad=true;break}
+        {
+          const aa=packed[i],bb=packed[j];
+          const dx=aa.x-bb.x,dy=aa.y-bb.y,d=Math.hypot(dx,dy);
+          if(d<ellipsePairLimit(aa,bb,dx,dy)*.998){bad=true;break}
+        }
       }
     }
     if(!bad)break;
 
     for(const p of packed){
-      p.rx*=.955;p.ry*=.955;p.bound=Math.max(p.rx,p.ry);
+      p.rx*=.978;p.ry*=.978;p.bound=Math.max(p.rx,p.ry);
       p.x=p.x*.95+center.x*.05;p.y=p.y*.95+center.y*.05;
     }
   }
@@ -495,6 +511,22 @@ function topLevelLandFraction(){
 
   payload.meta=payload.meta||{};
   payload.meta.worldLandFraction=frac;
+
+  /* Keep a real but narrow sea channel between the two largest realms.
+     We translate rather than shrink, so the 85% land budget is preserved. */
+  const shiftRoot=(name,dx,dy)=>{
+    const t=top.find(x=>x.canonicalName===name);
+    if(!t||!t.poly)return;
+    const b=polyBBox(t.poly);
+    dx=Math.max(8-b.x,Math.min(2392-(b.x+b.w),dx));
+    dy=Math.max(8-b.y,Math.min(1492-(b.y+b.h),dy));
+    t.poly=t.poly.map(p=>({x:p.x+dx,y:p.y+dy}));
+    t.cellPoly=t.poly;
+  };
+  shiftRoot('Plantae',-18,0);
+  shiftRoot('Animalia',18,0);
+  shiftRoot('Fungi',-8,6);
+  shiftRoot('Bacteria',8,6);
 })();
 
 /* v18.2 SAFE: rebuild only high-level parent coastlines bottom-up. */
@@ -543,6 +575,21 @@ for(const t of depthSorted){
   t.cellPoly=t.poly;
 }
 
+function computeRecursiveCoverage(){
+  for(const t of taxa){
+    if(!t.poly||t.id==='__life')continue;
+    const cs=(children.get(String(t.id))||[]).filter(c=>c.poly&&c.poly.length>=3);
+    if(!cs.length){
+      t.childLandFraction=null;
+      continue;
+    }
+    const parentArea=Math.max(1,absArea(t.poly));
+    const childArea=cs.reduce((s,c)=>s+absArea(c.poly),0);
+    t.childLandFraction=Math.max(0,Math.min(1,childArea/parentArea));
+  }
+}
+computeRecursiveCoverage();
+
 function pathFromPoly(poly){
   if(!poly||poly.length<3)return'';
   const mids=poly.map((p,i)=>{const q=poly[(i+1)%poly.length];return{x:(p.x+q.x)/2,y:(p.y+q.y)/2}});
@@ -576,7 +623,11 @@ const world={x:0,y:0,w:2400,h:1500};
 let view={...world},target={...world},ptr=new Map(),drag=false,last=null,pinch=null,lastSemantic=-1;
 function fit(r){let ar=innerWidth/innerHeight,rr=r.w/r.h;if(rr>ar){let nh=r.w/ar,d=nh-r.h;r.y-=d/2;r.h=nh}else{let nw=r.h*ar,d=nw-r.w;r.x-=d/2;r.w=nw}}
 function bbox(t){return t.box||polyBBox(t.poly)}
-function focus(t){let r={...bbox(t)},pad=.2;r={x:r.x-r.w*pad,y:r.y-r.h*pad,w:r.w*(1+2*pad),h:r.h*(1+2*pad)};fit(r);target=r;renderCrumbs(t);if((t.rank||'').toUpperCase()==='ORDER'&&t.inatObservationCount!=null){levelEl.textContent=`orde · ${Number(t.inatObservationCount).toLocaleString('nl-NL')} iNat-waarnemingen · gewicht ${Number(t.inatAreaWeight||1).toFixed(2)}`}else levelEl.textContent=(t.rank||'taxon').toLowerCase()}
+function focus(t){let r={...bbox(t)},pad=.2;r={x:r.x-r.w*pad,y:r.y-r.h*pad,w:r.w*(1+2*pad),h:r.h*(1+2*pad)};fit(r);target=r;renderCrumbs(t);if((t.rank||'').toUpperCase()==='ORDER'&&t.inatObservationCount!=null){levelEl.textContent=`orde · ${Number(t.inatObservationCount).toLocaleString('nl-NL')} iNat-waarnemingen · gewicht ${Number(t.inatAreaWeight||1).toFixed(2)}`}else{
+    const cov=t.childLandFraction;
+    levelEl.textContent=(t.rank||'taxon').toLowerCase()+
+      (cov!=null?` · land ${(cov*100).toFixed(1)}% · open ${((1-cov)*100).toFixed(1)}%`:'');
+  }}
 function home(){target={...world};fit(target);crumbs.innerHTML='';levelEl.textContent='wereld'}
 document.getElementById('home').onclick=home;
 function renderCrumbs(t){let arr=[];while(t&&t.id!=='__life'){arr.unshift(t);t=byId.get(String(t.parentId))}crumbs.innerHTML='';for(const x of arr){let s=document.createElement('span');s.className='crumb';s.textContent=x.canonicalName;s.onclick=()=>focus(x);crumbs.appendChild(s)}}
@@ -600,9 +651,9 @@ function anim(){let k=.16;view.x+=(target.x-view.x)*k;view.y+=(target.y-view.y)*
 {
   const landPct=Math.max(0,Math.min(100,100*(payload.meta.worldLandFraction||0)));
   const openPct=100-landPct;
-  status.textContent=`${payload.meta.taxa||taxa.length} taxa · land ${landPct.toFixed(1)}% · open ${openPct.toFixed(1)}% · iNaturalist: 10× = 2× ruimte`;
+  status.textContent=`${payload.meta.taxa||taxa.length} taxa · wereld land ${landPct.toFixed(1)}% · open ${openPct.toFixed(1)}% · doel per niveau ≤15% open · iNaturalist 10× = 2×`;
 }
-console.log('Atlas v19 world land fraction',payload.meta.worldLandFraction);
+console.log('Atlas v20 world land fraction',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
