@@ -60,7 +60,7 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 <g id="halos"></g><g id="regions"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>compact landschap · ≤15% open ruimte op elk niveau</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>compact landschap · echte ≤15% open ruimte</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -479,14 +479,28 @@ function scalePolyAbout(poly,c,f){
   return poly.map(p=>({x:c.x+(p.x-c.x)*f,y:c.y+(p.y-c.y)*f}));
 }
 function topLevelLandFraction(){
+  /* True visible coverage: overlaps count only once.
+     A deterministic sampling grid is accurate enough for the status/enforcer
+     and avoids the misleading double-counting used in v19/v20. */
   const rootsNow=(children.get(String(roots[0].id))||[]).filter(t=>t.poly&&t.poly.length>=3);
-  const worldArea=2400*1500;
-  const land=rootsNow.reduce((s,t)=>s+absArea(t.poly),0);
-  return land/worldArea;
+  const NX=180,NY=112;
+  let land=0,total=NX*NY;
+  for(let iy=0;iy<NY;iy++){
+    const y=(iy+.5)*1500/NY;
+    for(let ix=0;ix<NX;ix++){
+      const x=(ix+.5)*2400/NX;
+      let hit=false;
+      for(const t of rootsNow){
+        if(pointInPoly({x,y},t.poly)){hit=true;break}
+      }
+      if(hit)land++;
+    }
+  }
+  return land/total;
 }
 (function enforceWorldCoverage(){
   const top=(children.get(String(roots[0].id))||[]).filter(t=>t.poly&&t.poly.length>=3);
-  const target=.85;
+  const target=.885;
   let frac=topLevelLandFraction();
 
   for(let round=0;round<18 && frac<target;round++){
@@ -512,40 +526,95 @@ function topLevelLandFraction(){
   payload.meta=payload.meta||{};
   payload.meta.worldLandFraction=frac;
 
-  /* Keep a real but narrow sea channel between the two largest realms.
-     We translate rather than shrink, so the 85% land budget is preserved. */
-  const shiftRoot=(name,dx,dy)=>{
-    const t=top.find(x=>x.canonicalName===name);
-    if(!t||!t.poly)return;
-    const b=polyBBox(t.poly);
-    dx=Math.max(8-b.x,Math.min(2392-(b.x+b.w),dx));
-    dy=Math.max(8-b.y,Math.min(1492-(b.y+b.h),dy));
-    t.poly=t.poly.map(p=>({x:p.x+dx,y:p.y+dy}));
-    t.cellPoly=t.poly;
-  };
-  shiftRoot('Plantae',-18,0);
-  shiftRoot('Animalia',18,0);
-  shiftRoot('Fungi',-8,6);
-  shiftRoot('Bacteria',8,6);
+  /* Guaranteed sea channel between Plantae and Animalia.
+     Unlike the old translation trick, clipping makes a real strip of ocean. */
+  function clipX(poly,cut,keepLeft){
+    const inside=p=>keepLeft?p.x<=cut:p.x>=cut;
+    const out=[];
+    for(let i=0;i<poly.length;i++){
+      const a=poly[i],b=poly[(i+1)%poly.length],ia=inside(a),ib=inside(b);
+      if(ia)out.push({x:a.x,y:a.y});
+      if(ia!==ib){
+        const den=b.x-a.x;
+        const u=Math.abs(den)<1e-9?0:(cut-a.x)/den;
+        out.push({x:cut,y:a.y+(b.y-a.y)*u});
+      }
+    }
+    return cleanPoly(out);
+  }
+  const plant=top.find(t=>t.canonicalName==='Plantae');
+  const animal=top.find(t=>t.canonicalName==='Animalia');
+  if(plant&&animal){
+    const pc=polygonCentroid(plant.poly),ac=polygonCentroid(animal.poly);
+    const mid=(pc.x+ac.x)/2;
+    const halfChannel=13; // ~26 SVG units of ocean
+    const pp=clipX(plant.poly,mid-halfChannel,true);
+    const ap=clipX(animal.poly,mid+halfChannel,false);
+    if(pp.length>=3)plant.poly=plant.cellPoly=pp;
+    if(ap.length>=3)animal.poly=animal.cellPoly=ap;
+  }
+  /* Re-measure AFTER the channel: this is the number shown to the user. */
+  frac=topLevelLandFraction();
+  payload.meta.worldLandFraction=frac;
 })();
 
 /* v18.2 SAFE: rebuild only high-level parent coastlines bottom-up. */
-function convexHull(points){
-  if(points.length<4)return points.slice();
-  const pts=points.slice().sort((a,b)=>a.x===b.x?a.y-b.y:a.x-b.x);
-  const cross=(o,a,b)=>(a.x-o.x)*(b.y-o.y)-(a.y-o.y)*(b.x-o.x);
-  const lo=[],hi=[];
-  for(const p of pts){
-    while(lo.length>=2&&cross(lo[lo.length-2],lo[lo.length-1],p)<=0)lo.pop();
-    lo.push(p);
+function cloudCenter(cloud){
+  let x=0,y=0;
+  for(const p of cloud){x+=p.x;y+=p.y}
+  return{x:x/cloud.length,y:y/cloud.length};
+}
+function starEnvelope(cloud,id){
+  if(cloud.length<3)return cloud.slice();
+  const c=cloudCenter(cloud);
+  const N=120;
+  const bins=new Array(N).fill(0);
+  const TAU=Math.PI*2;
+
+  for(const p of cloud){
+    let a=Math.atan2(p.y-c.y,p.x-c.x);
+    if(a<0)a+=TAU;
+    const k=Math.min(N-1,Math.floor(a/TAU*N));
+    const r=Math.hypot(p.x-c.x,p.y-c.y);
+    if(r>bins[k])bins[k]=r;
   }
-  for(let i=pts.length-1;i>=0;i--){
-    const p=pts[i];
-    while(hi.length>=2&&cross(hi[hi.length-2],hi[hi.length-1],p)<=0)hi.pop();
-    hi.push(p);
+
+  /* Fill empty angular bins by circular interpolation. */
+  for(let pass=0;pass<N;pass++){
+    let changed=false;
+    for(let i=0;i<N;i++)if(!bins[i]){
+      const a=bins[(i-1+N)%N],b=bins[(i+1)%N];
+      if(a&&b){bins[i]=(a+b)/2;changed=true}
+      else if(a){bins[i]=a;changed=true}
+      else if(b){bins[i]=b;changed=true}
+    }
+    if(!changed)break;
   }
-  lo.pop();hi.pop();
-  return lo.concat(hi);
+
+  /* Neighbor dilation ensures every child vertex sits inside the connecting
+     edges, while remaining much tighter than a convex hull. */
+  const rad=bins.map((r,i)=>{
+    let m=r;
+    for(let d=-2;d<=2;d++)m=Math.max(m,bins[(i+d+N)%N]||0);
+    return m;
+  });
+
+  let best=null;
+  for(let margin=1.010;margin<=1.0801;margin+=.005){
+    const poly=[];
+    for(let i=0;i<N;i++){
+      const a=(i+.5)/N*TAU;
+      const rough=1+.006*Math.sin(i*.83+6.28*h2(id,14000));
+      const r=rad[i]*margin*rough;
+      poly.push({x:c.x+Math.cos(a)*r,y:c.y+Math.sin(a)*r});
+    }
+    let ok=true;
+    for(const p of cloud){
+      if(!pointInPoly(p,poly)){ok=false;break}
+    }
+    if(ok){best=poly;break}
+  }
+  return cleanPoly(best||cloud);
 }
 
 const depthSorted=[...taxa]
@@ -554,28 +623,24 @@ const depthSorted=[...taxa]
 
 for(const t of depthSorted){
   const cs=(children.get(String(t.id))||[]).filter(c=>c.poly&&c.poly.length>=3);
-  if(!cs.length||(t.depth||0)>2||(t.depth||0)===0)continue;
+  if(!cs.length||(t.depth||0)===0)continue;
 
   const cloud=[];
   for(const c of cs){
-    const step=Math.max(1,Math.ceil(c.poly.length/12));
-    for(let i=0;i<c.poly.length;i+=step)cloud.push(c.poly[i]);
+    /* all vertices, not sparse samples: parent must truly contain every child */
+    for(const p of c.poly)cloud.push(p);
   }
   if(cloud.length<3)continue;
 
-  let hull=convexHull(cloud);
-  if(hull.length<3)continue;
-  const ctr=polygonCentroid(hull);
-  hull=hull.map((p,i)=>{
-    const dx=p.x-ctr.x,dy=p.y-ctr.y;
-    const q=1.025+.012*Math.sin(i*1.91+6.28*h2(t.id,12000));
-    return{x:ctr.x+dx*q,y:ctr.y+dy*q};
-  });
-  t.poly=cleanPoly(hull);
-  t.cellPoly=t.poly;
+  const env=starEnvelope(cloud,t.id);
+  if(env&&env.length>=3){
+    t.poly=env;
+    t.cellPoly=t.poly;
+  }
 }
 
 function computeRecursiveCoverage(){
+  let worst=1,worstName='';
   for(const t of taxa){
     if(!t.poly||t.id==='__life')continue;
     const cs=(children.get(String(t.id))||[]).filter(c=>c.poly&&c.poly.length>=3);
@@ -586,7 +651,13 @@ function computeRecursiveCoverage(){
     const parentArea=Math.max(1,absArea(t.poly));
     const childArea=cs.reduce((s,c)=>s+absArea(c.poly),0);
     t.childLandFraction=Math.max(0,Math.min(1,childArea/parentArea));
+    if(t.childLandFraction<worst){
+      worst=t.childLandFraction;worstName=t.canonicalName||'';
+    }
   }
+  payload.meta=payload.meta||{};
+  payload.meta.worstChildLandFraction=worst;
+  payload.meta.worstChildTaxon=worstName;
 }
 computeRecursiveCoverage();
 
@@ -651,9 +722,10 @@ function anim(){let k=.16;view.x+=(target.x-view.x)*k;view.y+=(target.y-view.y)*
 {
   const landPct=Math.max(0,Math.min(100,100*(payload.meta.worldLandFraction||0)));
   const openPct=100-landPct;
-  status.textContent=`${payload.meta.taxa||taxa.length} taxa · wereld land ${landPct.toFixed(1)}% · open ${openPct.toFixed(1)}% · doel per niveau ≤15% open · iNaturalist 10× = 2×`;
+  const worstPct=100*(payload.meta.worstChildLandFraction||0);
+  status.textContent=`${payload.meta.taxa||taxa.length} taxa · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'})`;
 }
-console.log('Atlas v20 world land fraction',payload.meta.worldLandFraction);
+console.log('Atlas v21 true world land fraction',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
