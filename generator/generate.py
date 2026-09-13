@@ -1,164 +1,263 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 import json, math, time, urllib.parse, urllib.request
-from collections import deque, defaultdict
+from collections import defaultdict
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parent.parent
 CFG=json.loads((ROOT/"config.json").read_text(encoding="utf-8"))
 GBIF=CFG["taxonomy"]["apiBase"].rstrip("/")
 DATASET=CFG["taxonomy"]["datasetKey"]
-MAX_TAXA=int(CFG["limits"]["maxTaxa"])
-MAX_CHILDREN=int(CFG["limits"]["maxChildrenPerTaxon"])
 INAT="https://api.inaturalist.org/v1"
 EXP=math.log10(2.0)
-HEADERS={"User-Agent":"AtlasOfLifePrototype/0.9"}
+HEADERS={"User-Agent":"AtlasOfLifePrototype/1.0"}
 ROOT_NAMES=["Animalia","Plantae","Fungi","Bacteria"]
 PREFERRED={"Animalia":"KINGDOM","Plantae":"KINGDOM","Fungi":"KINGDOM","Bacteria":"DOMAIN"}
-_last=0.0
+_last_inat=0.0
 
 def get_json(url,retries=4,inat=False):
-    global _last
+    global _last_inat
     if inat:
-        dt=time.monotonic()-_last
-        if dt<1.05: time.sleep(1.05-dt)
-    for i in range(retries):
+        dt=time.monotonic()-_last_inat
+        if dt<1.05:
+            time.sleep(1.05-dt)
+    for attempt in range(retries):
         try:
             req=urllib.request.Request(url,headers=HEADERS)
-            with urllib.request.urlopen(req,timeout=45) as r: data=json.load(r)
-            if inat:_last=time.monotonic()
+            with urllib.request.urlopen(req,timeout=45) as r:
+                data=json.load(r)
+            if inat:_last_inat=time.monotonic()
             return data
         except Exception:
-            if i+1==retries: raise
-            time.sleep(1.5*(i+1))
+            if attempt+1==retries: raise
+            time.sleep(1.5*(attempt+1))
 
-def rows(x):
-    if isinstance(x,list): return [r for r in x if isinstance(r,dict)]
+def results(x):
+    if isinstance(x,list):
+        return [r for r in x if isinstance(r,dict)]
     if isinstance(x,dict):
-        if isinstance(x.get("results"),list): return [r for r in x["results"] if isinstance(r,dict)]
-        if "key" in x:return [x]
+        if isinstance(x.get("results"),list):
+            return [r for r in x["results"] if isinstance(r,dict)]
+        if "key" in x:
+            return [x]
     return []
 
 def root_endpoint():
-    return rows(get_json(f"{GBIF}/species/root/{urllib.parse.quote(DATASET)}"))
+    return results(get_json(f"{GBIF}/species/root/{urllib.parse.quote(DATASET)}"))
 
 def resolve_root(name):
-    exact=[r for r in root_endpoint() if (r.get("canonicalName") or r.get("scientificName") or "").casefold()==name.casefold()]
-    if exact:return exact[0]
+    exact=[r for r in root_endpoint()
+           if (r.get("canonicalName") or r.get("scientificName") or "").casefold()==name.casefold()]
+    if exact:
+        return exact[0]
     q=urllib.parse.urlencode({"q":name,"datasetKey":DATASET,"limit":100})
-    rs=rows(get_json(f"{GBIF}/species/search?{q}"))
+    rs=results(get_json(f"{GBIF}/species/search?{q}"))
     exact=[r for r in rs if (r.get("canonicalName") or r.get("scientificName") or "").casefold()==name.casefold()]
     ranked=[r for r in exact if (r.get("rank") or "").upper()==PREFERRED[name]]
-    if ranked:return ranked[0]
-    if exact:return exact[0]
+    if ranked:
+        return ranked[0]
+    if exact:
+        return exact[0]
     raise RuntimeError(f"Cannot resolve root {name}")
 
-def children(key):
+def search_orders(root_key):
     out=[];offset=0
     while True:
-        page=get_json(f"{GBIF}/species/{key}/children?limit=1000&offset={offset}")
-        batch=rows(page);out.extend(batch)
-        if not isinstance(page,dict) or page.get("endOfRecords",True) or not batch:break
+        params=urllib.parse.urlencode({
+            "rank":"ORDER",
+            "higherTaxonKey":root_key,
+            "datasetKey":DATASET,
+            "limit":1000,
+            "offset":offset
+        })
+        page=get_json(f"{GBIF}/species/search?{params}")
+        batch=results(page)
+        out.extend(batch)
+        print(f"GBIF root {root_key}: +{len(batch)} orders at offset {offset}",flush=True)
+        if not isinstance(page,dict) or page.get("endOfRecords",True) or not batch:
+            break
         offset+=len(batch)
-    return [k for k in out if (k.get("taxonomicStatus") or k.get("status") or "").upper() not in {"SYNONYM","HETEROTYPIC_SYNONYM"}]
+    uniq={}
+    for r in out:
+        status=(r.get("taxonomicStatus") or r.get("status") or "").upper()
+        if status in {"SYNONYM","HETEROTYPIC_SYNONYM"}:
+            continue
+        key=r.get("key")
+        if key is not None:
+            uniq[str(key)]=r
+    return list(uniq.values())
 
-def clean(u,parent=None,depth=0,rootname=None):
-    return {"id":str(u.get("key")),"key":u.get("key"),
-      "parentId":str(parent) if parent is not None else (str(u.get("parentKey")) if u.get("parentKey") is not None else None),
-      "scientificName":u.get("scientificName") or u.get("canonicalName") or "Unnamed",
-      "canonicalName":u.get("canonicalName") or u.get("scientificName") or "Unnamed",
-      "rank":(u.get("rank") or "UNRANKED").upper(),"status":u.get("taxonomicStatus") or u.get("status") or "",
-      "depth":depth,"rootName":rootname}
+def prior_inat_counts():
+    p=ROOT/"data"/"taxa.json"
+    if not p.exists():
+        return {}
+    try:
+        old=json.loads(p.read_text(encoding="utf-8"))
+        return {
+            n["canonicalName"]:int(n["inatObservationCount"])
+            for n in old.get("taxa",[])
+            if n.get("rank")=="ORDER"
+            and n.get("canonicalName")
+            and n.get("inatObservationCount") is not None
+        }
+    except Exception:
+        return {}
 
-def build_to_order(root):
-    rootname=root.get("canonicalName") or root.get("scientificName")
-    taxa=[];seen=set();q=deque([(root,0,None)])
-    while q:
-        u,depth,parent=q.popleft(); key=u.get("key")
-        if key is None or key in seen: continue
-        seen.add(key); n=clean(u,parent,depth,rootname); taxa.append(n)
-        if n["rank"]=="ORDER": continue
-        if depth>10: continue
-        try:kids=children(key)
-        except Exception as e:
-            print("WARN children",key,e,flush=True);continue
-        for c in kids:q.append((c,depth+1,key))
-    return taxa
+def inat_count_by_name(name):
+    params=urllib.parse.urlencode({"taxon_name":name,"per_page":1})
+    payload=get_json(f"{INAT}/observations?{params}",inat=True)
+    return int(payload.get("total_results",0)) if isinstance(payload,dict) else 0
 
-def inat_order(name):
-    q=urllib.parse.urlencode({"q":name,"rank":"order","is_active":"true","per_page":30})
-    rs=get_json(f"{INAT}/taxa?{q}",inat=True).get("results",[])
-    exact=[r for r in rs if (r.get("name") or "").casefold()==name.casefold() and (r.get("rank") or "").casefold()=="order"]
-    return exact[0] if exact else None
-
-def obs_count(tid):
-    q=urllib.parse.urlencode({"taxon_id":tid,"per_page":1})
-    return int(get_json(f"{INAT}/observations?{q}",inat=True).get("total_results",0))
+def add_node(nodes,node_id,parent_id,name,rank,key=None):
+    if node_id in nodes:
+        return
+    nodes[node_id]={
+        "id":node_id,
+        "key":key,
+        "parentId":parent_id,
+        "scientificName":name,
+        "canonicalName":name,
+        "rank":rank,
+        "status":"ACCEPTED"
+    }
 
 def main():
     roots=[resolve_root(n) for n in ROOT_NAMES]
-    print("Resolved:",[(r.get("canonicalName"),r.get("rank"),r.get("key")) for r in roots],flush=True)
+    print("Resolved roots:",
+          [(r.get("canonicalName"),r.get("rank"),r.get("key")) for r in roots],
+          flush=True)
 
-    taxa=[]
-    for r in roots:
-        part=build_to_order(r)
-        print(r.get("canonicalName"),"skeleton",len(part),"orders",sum(n["rank"]=="ORDER" for n in part),flush=True)
-        taxa.extend(part)
+    previous=prior_inat_counts()
+    print("Cached iNaturalist order counts:",len(previous),flush=True)
 
-    unique=[];seen=set()
-    for n in taxa:
-        if n["id"] not in seen:
-            seen.add(n["id"]);unique.append(n)
-    taxa=unique
-    orders=[n for n in taxa if n["rank"]=="ORDER"]
+    nodes={}
+    order_nodes=[]
 
-    for i,n in enumerate(orders,1):
-        try:
-            it=inat_order(n["canonicalName"])
-            if not it:
-                n.update(inatTaxonId=None,inatObservationCount=0,inatAreaWeight=0.0)
+    for root in roots:
+        rname=root.get("canonicalName") or root.get("scientificName")
+        rid=str(root.get("key"))
+        add_node(nodes,rid,None,rname,(root.get("rank") or PREFERRED[rname]).upper(),root.get("key"))
+
+        orders=search_orders(root.get("key"))
+        print(rname,"direct orders:",len(orders),flush=True)
+
+        for row in orders:
+            order_name=row.get("canonicalName") or row.get("scientificName") or "Unnamed"
+            order_key=row.get("key")
+            if order_key is None:
                 continue
-            c=obs_count(int(it["id"])); w=math.pow(max(1,c),EXP)
-            n.update(inatTaxonId=int(it["id"]),inatObservationCount=c,inatAreaWeight=w)
-            print(f"[{i}/{len(orders)}] {n['canonicalName']}: {c:,} -> {w:.3f}",flush=True)
-        except Exception as e:
-            n.update(inatTaxonId=None,inatObservationCount=0,inatAreaWeight=0.0)
-            print("WARN iNat",n["canonicalName"],e,flush=True)
+            parent_id=rid
 
+            phylum_key=row.get("phylumKey")
+            phylum_name=row.get("phylum")
+            if phylum_key and phylum_name:
+                pid=str(phylum_key)
+                add_node(nodes,pid,rid,phylum_name,"PHYLUM",phylum_key)
+                parent_id=pid
+
+            class_key=row.get("classKey")
+            class_name=row.get("class")
+            if class_key and class_name:
+                cid=str(class_key)
+                add_node(nodes,cid,parent_id,class_name,"CLASS",class_key)
+                parent_id=cid
+
+            oid=str(order_key)
+            add_node(nodes,oid,parent_id,order_name,"ORDER",order_key)
+            order_nodes.append(nodes[oid])
+
+    seen=set();orders=[]
+    for n in order_nodes:
+        if n["id"] not in seen:
+            seen.add(n["id"]);orders.append(n)
+
+    print("Unique orders:",len(orders),flush=True)
+
+    reused=queried=0
+    for i,n in enumerate(orders,1):
+        name=n["canonicalName"]
+        if name in previous:
+            count=previous[name]
+            reused+=1
+            source="cache"
+        else:
+            try:
+                count=inat_count_by_name(name)
+            except Exception as exc:
+                print("WARN iNat",name,exc,flush=True)
+                count=0
+            queried+=1
+            source="api"
+
+        weight=math.pow(max(1,count),EXP) if count>0 else 0.0
+        n["inatObservationCount"]=count
+        n["inatAreaWeight"]=weight
+        n["mapWeight"]=max(.01,weight)
+
+        if source=="api" or i%25==0:
+            print(f"[{i}/{len(orders)}] {name}: {count:,} -> {weight:.3f} ({source})",flush=True)
+
+    print("iNat reused:",reused,"queried:",queried,flush=True)
+
+    taxa=list(nodes.values())
     by={n["id"]:n for n in taxa}
     kids=defaultdict(list)
     for n in taxa:
-        if n["parentId"] in by:kids[n["parentId"]].append(n["id"])
+        if n["parentId"] in by:
+            kids[n["parentId"]].append(n["id"])
 
     memo={}
     def signal(nid):
-        if nid in memo:return memo[nid]
+        if nid in memo:
+            return memo[nid]
         n=by[nid]
-        v=float(n.get("inatAreaWeight",0.0)) if n["rank"]=="ORDER" else sum(signal(c) for c in kids.get(nid,[]))
-        memo[nid]=v; return v
+        if n["rank"]=="ORDER":
+            v=float(n.get("mapWeight",0.01))
+        else:
+            v=sum(signal(c) for c in kids.get(nid,[]))
+        memo[nid]=v
+        return v
 
     for n in taxa:
-        if n["rank"]=="ORDER":n["mapWeight"]=max(.01,float(n.get("inatAreaWeight",0.0)))
-        else:n["mapWeight"]=max(.01,signal(n["id"]))
+        if n["rank"]!="ORDER":
+            n["mapWeight"]=max(.01,signal(n["id"]))
 
-    root_ids=[n["id"] for n in taxa if not n["parentId"] or n["parentId"] not in by]
+    root_ids=[str(r.get("key")) for r in roots]
     summary=[]
     for rid in root_ids:
-        r=by[rid]; stack=[rid];num=match=raw=0
+        r=by[rid]
+        stack=[rid];orders_n=raw=0
         while stack:
-            nid=stack.pop(); n=by[nid]
-            if n["rank"]=="ORDER":
-                num+=1;raw+=int(n.get("inatObservationCount",0));match+=1 if n.get("inatTaxonId") else 0
+            nid=stack.pop();node=by[nid]
+            if node["rank"]=="ORDER":
+                orders_n+=1
+                raw+=int(node.get("inatObservationCount",0))
             stack.extend(kids.get(nid,[]))
-        summary.append({"name":r["canonicalName"],"orders":num,"matchedOrders":match,"rawObservations":raw,"mapWeight":r["mapWeight"]})
+        summary.append({
+            "name":r["canonicalName"],
+            "orders":orders_n,
+            "rawObservations":raw,
+            "mapWeight":r["mapWeight"]
+        })
+
     print("ROOT SUMMARY",summary,flush=True)
 
-    payload={"meta":{"source":"COL XR via GBIF","areaSource":"iNaturalist at ORDER rank",
-      "areaFormula":"N ** log10(2)","sampling":"complete skeleton to ORDER before any deeper detail",
-      "generatedAt":time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime()),"taxa":len(taxa),"rootSummary":summary,
-      "roots":[{"name":r.get("canonicalName"),"rank":r.get("rank"),"key":r.get("key")} for r in roots]},
-      "taxa":taxa}
-    (ROOT/"data"/"taxa.json").write_text(json.dumps(payload,ensure_ascii=False,separators=(",",":")),encoding="utf-8")
-    print("Wrote",len(taxa),"taxa",flush=True)
+    payload={"meta":{
+        "source":"COL XR via GBIF direct ORDER search",
+        "areaSource":"iNaturalist taxon_name observation counts at ORDER rank",
+        "areaFormula":"N ** log10(2); 10x observations = 2x area",
+        "generatedAt":time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime()),
+        "taxa":len(taxa),
+        "orders":len(orders),
+        "rootSummary":summary,
+        "roots":[{"name":r.get("canonicalName"),"rank":r.get("rank"),"key":r.get("key")} for r in roots]
+    },"taxa":taxa}
 
-if __name__=="__main__":main()
+    (ROOT/"data"/"taxa.json").write_text(
+        json.dumps(payload,ensure_ascii=False,separators=(",",":")),
+        encoding="utf-8"
+    )
+    print("Wrote",len(taxa),"nodes",len(orders),"orders",flush=True)
+
+if __name__=="__main__":
+    main()
