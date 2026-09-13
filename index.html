@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — order silhouettes v25</title>
+<title>Atlas of Life — wild order silhouettes v26</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -60,7 +60,7 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 <g id="halos"></g><g id="regions"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v25 · vormrijke orden · ≤15% open ruimte</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v26 · wilde natuurvormen · ≤15% open ruimte</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -891,78 +891,91 @@ computeRecursiveCoverage();
   }
 
   /* ---------- shape inside a cell: target 85% area ---------- */
+  function anglePulse(a,center,width){
+    const d=Math.atan2(Math.sin(a-center),Math.cos(a-center));
+    return Math.exp(-.5*(d/width)*(d/width));
+  }
+
   function angularStyle(t,a){
     const name=String(t.canonicalName||'').toLowerCase();
     const rank=(t.rank||'').toUpperCase();
 
     if(rank==='ORDER'&&name==='passeriformes'){
-      /* Flying swallow: beak/head right, swept wings and a forked tail. */
-      const head=Math.exp(-Math.pow((Math.atan2(Math.sin(a),Math.cos(a)))/.42,2));
-      const wing1=Math.exp(-Math.pow((a-2.05)/.38,2));
-      const wing2=Math.exp(-Math.pow((a+2.05)/.38,2));
-      const tailNotch=Math.exp(-Math.pow((Math.abs(a)-Math.PI)/.20,2));
-      const tailLobes=
-        Math.exp(-Math.pow((a-2.82)/.18,2))+
-        Math.exp(-Math.pow((a+2.82)/.18,2));
-      return .81+.15*head+.16*(wing1+wing2)+.12*tailLobes-.19*tailNotch;
+      /* Readable flying swallow: beak at right, two swept wings, two tail
+         streamers and a very explicit fork. Narrow cuts preserve land area. */
+      return .994
+        -.23*anglePulse(a,-.72,.145)
+        -.23*anglePulse(a, .72,.145)
+        -.19*anglePulse(a,-2.48,.115)
+        -.19*anglePulse(a, 2.48,.115)
+        -.38*anglePulse(a, Math.PI,.090);
     }
 
     if(rank==='ORDER'&&name==='lepidoptera'){
-      /* Four generous wing lobes with a clear waist: a butterfly silhouette. */
-      const fore=
-        Math.exp(-Math.pow((a-.72)/.34,2))+
-        Math.exp(-Math.pow((a+.72)/.34,2));
-      const hind=
-        Math.exp(-Math.pow((a-2.34)/.42,2))+
-        Math.exp(-Math.pow((a+2.34)/.42,2));
-      const waist=Math.exp(-Math.pow(Math.sin(a)/.18,2));
-      return .73+.19*fore+.16*hind-.06*waist;
+      /* Four unmistakable wings. Deep horizontal waist cuts separate left
+         and right pairs; smaller vertical cuts separate fore/hind wings. */
+      return .994
+        -.34*anglePulse(a,0,.155)
+        -.34*anglePulse(a,Math.PI,.155)
+        -.24*anglePulse(a,-Math.PI/2,.120)
+        -.24*anglePulse(a, Math.PI/2,.120);
     }
 
     if(rank==='ORDER'&&name==='coleoptera'){
-      /* Beetle / shield outline. */
-      return .84+.075*Math.cos(2*a)+.035*Math.cos(5*a);
+      /* Beetle shield: head notch, split tail and small leg sockets. */
+      return .994
+        -.25*anglePulse(a,0,.12)-.21*anglePulse(a,Math.PI,.10)
+        -.12*anglePulse(a,-1.18,.09)-.12*anglePulse(a,1.18,.09)
+        -.10*anglePulse(a,-2.10,.08)-.10*anglePulse(a,2.10,.08);
     }
 
     if(rank==='ORDER'&&name==='odonata'){
-      /* Four long wings around a narrow body. */
-      return .74+.22*Math.pow(Math.abs(Math.sin(2*a)),1.7)+.025*Math.cos(8*a);
+      /* Dragonfly: four long diagonal wings around a narrow cross-body. */
+      return .994
+        -.36*anglePulse(a,0,.135)-.36*anglePulse(a,Math.PI,.135)
+        -.27*anglePulse(a,-Math.PI/2,.10)-.27*anglePulse(a,Math.PI/2,.10);
     }
 
     if(rank==='ORDER'&&name==='diptera'){
-      /* Compact fly with one dominant wing pair. */
-      const wings=Math.exp(-Math.pow((Math.abs(a)-1.72)/.34,2));
-      return .80+.17*wings+.055*Math.cos(a);
+      /* Fly: two large upper wings, abdomen and an asymmetric head cut. */
+      return .994
+        -.32*anglePulse(a,0,.14)-.24*anglePulse(a,Math.PI,.11)
+        -.19*anglePulse(a,-1.62,.10)-.30*anglePulse(a,1.62,.12);
     }
 
     if(rank==='ORDER'&&name==='hymenoptera'){
-      /* Wasp-like, with paired lobes and a pinched waist. */
-      return .82+.10*Math.cos(2*a)+.055*Math.cos(4*a)-.045*Math.cos(a);
+      /* Wasp: a strong waist with paired wing and leg bays. */
+      return .994
+        -.35*anglePulse(a,0,.13)-.30*anglePulse(a,Math.PI,.12)
+        -.16*anglePulse(a,-1.00,.09)-.16*anglePulse(a,1.00,.09)
+        -.13*anglePulse(a,-2.18,.08)-.13*anglePulse(a,2.18,.08);
     }
 
     if(rank==='ORDER'){
-      /* Every other order receives one stable but visibly distinct family.
-         Rotation and amplitude are hashed, so the atlas stays reproducible. */
+      /* Wild natural silhouettes. Most of the coast stays close to its cell
+         boundary; narrow fjords cut deeply inward. This produces conspicuous
+         lobes without sacrificing the 85% area target. */
       const phase=2*Math.PI*h2(t.id,17100);
-      const amp=.82+.28*h2(t.id,17101);
-      switch(Math.floor(h2(t.id,17102)*8)){
-        case 0: /* leaf / teardrop */
-          return .855+amp*(.080*Math.cos(a-phase)-.032*Math.cos(2*(a-phase)));
-        case 1: /* three-lobed clover */
-          return .855+amp*(.072*Math.cos(3*a+phase)+.024*Math.cos(6*a-phase));
-        case 2: /* many-rayed starfish */
-          return .850+amp*(.058*Math.cos(5*a+phase)+.027*Math.cos(2*a-phase));
-        case 3: /* kidney / curled shell */
-          return .870+amp*(.070*Math.cos(a+phase)-.052*Math.cos(2*a-phase));
-        case 4: /* broad fan */
-          return .850+amp*(.070*Math.cos(4*a+phase)+.030*Math.sin(a-phase));
-        case 5: /* asymmetric kite */
-          return .860+amp*(.060*Math.cos(2*a+phase)+.042*Math.cos(3*a-phase));
-        case 6: /* scalloped rosette */
-          return .845+amp*(.052*Math.cos(6*a+phase)+.026*Math.sin(3*a-phase));
-        default: /* amoeba / archipelago */
-          return .855+amp*(.047*Math.sin(3*a+phase)+.038*Math.sin(7*a-phase));
+      const family=Math.floor(h2(t.id,17102)*8);
+      const count=[3,5,7,2,6,4,8,5][family];
+      const depthBase=[.30,.23,.18,.34,.21,.28,.17,.25][family];
+      const widthBase=[.15,.11,.075,.16,.085,.12,.060,.10][family];
+      let f=.994;
+
+      for(let k=0;k<count;k++){
+        let at;
+        if(family===0)at=phase-1.0+k*.62;                 /* claw / comb */
+        else if(family===3)at=phase+k*Math.PI;            /* shell / kidney */
+        else if(family===5)at=phase+(k<2?-.62:.62)+(k%2)*Math.PI;
+        else at=phase+2*Math.PI*k/count+(h2(t.id,17200+k)-.5)*.34;
+        const d=depthBase*(.76+.45*h2(t.id,17300+k));
+        const w=widthBase*(.78+.46*h2(t.id,17400+k));
+        f-=d*anglePulse(a,at,w);
       }
+
+      /* A second scale of irregularity prevents mechanical rosettes. */
+      f-=.035*(.5+.5*Math.sin((2+family%4)*a+phase));
+      return f;
     }
 
     /* Higher and lower ranks remain calmer organic islands. */
@@ -997,7 +1010,32 @@ computeRecursiveCoverage();
 
     const c=polygonCentroid(cell);
     const isOrder=(t.rank||'').toUpperCase()==='ORDER';
-    const detail=isOrder?72:Math.max(36,Math.min(64,cell.length*5));
+
+    /* Keep non-order ranks on the proven v23 geometry. Sampling every rank
+       in v25 made parent hulls too small and caused 20–37% open space. */
+    if(!isOrder){
+      const base=cell.map((p,i)=>{
+        const a=Math.atan2(p.y-c.y,p.x-c.x);
+        const f=Math.max(.70,Math.min(.985,
+          angularStyle(t,a)+.010*(h2(t.id,18000+i)-.5)
+        ));
+        return {p,f};
+      });
+      const targetArea=absArea(cell)*target;
+      let lo=.70,hi=1.22,best=cell;
+      for(let k=0;k<36;k++){
+        const m=(lo+hi)/2;
+        const q=base.map(o=>{
+          const f=Math.min(.995,o.f*m);
+          return{x:c.x+(o.p.x-c.x)*f,y:c.y+(o.p.y-c.y)*f};
+        });
+        best=q;
+        if(absArea(q)<targetArea)lo=m;else hi=m;
+      }
+      return cleanPoly(best);
+    }
+
+    const detail=96;
     const rotation=isOrder&&['passeriformes','lepidoptera','odonata','diptera']
       .includes(String(t.canonicalName||'').toLowerCase())
       ? 0
@@ -1011,24 +1049,33 @@ computeRecursiveCoverage();
       const a=2*Math.PI*i/detail;
       const boundary=rayToCellRadius(cell,c,a);
       const localA=Math.atan2(Math.sin(a-rotation),Math.cos(a-rotation));
-      const f=Math.max(.60,Math.min(.992,
-        angularStyle(t,localA)+.010*(h2(t.id,18000+i)-.5)
+      const f=Math.max(.50,Math.min(.995,
+        angularStyle(t,localA)+.007*(h2(t.id,18000+i)-.5)
       ));
       base.push({a,boundary,f});
     }
 
     const targetArea=absArea(cell)*target;
-    let lo=.70,hi=1.42,best=null;
+    const makePoly=m=>base.map(o=>{
+      const f=Math.min(.998,o.f*m);
+      return{
+        x:c.x+Math.cos(o.a)*o.boundary*f,
+        y:c.y+Math.sin(o.a)*o.boundary*f
+      };
+    });
+
+    /* If an unusually narrow cell cannot contain 85% with the full-depth
+       profile, soften only as much as needed. The wild silhouette survives,
+       but the quantitative area promise always wins. */
+    for(let repair=0;repair<8&&absArea(makePoly(1.55))<targetArea;repair++){
+      for(const o of base)o.f=1-(1-o.f)*.86;
+    }
+
+    let lo=.62,hi=1.55,best=null;
 
     for(let k=0;k<38;k++){
       const m=(lo+hi)/2;
-      const q=base.map(o=>{
-        const f=Math.min(.995,o.f*m);
-        return{
-          x:c.x+Math.cos(o.a)*o.boundary*f,
-          y:c.y+Math.sin(o.a)*o.boundary*f
-        };
-      });
+      const q=makePoly(m);
       const a=absArea(q);
       best=q;
       if(a<targetArea)lo=m; else hi=m;
@@ -1323,7 +1370,7 @@ function anim(){let k=.16;view.x+=(target.x-view.x)*k;view.y+=(target.y-view.y)*
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
   status.textContent=`${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v25 variable order silhouettes · world land fraction',payload.meta.worldLandFraction);
+console.log('Atlas v26 wild order silhouettes · world land fraction',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
