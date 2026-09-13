@@ -4,18 +4,18 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
 <title>Atlas of Life — wild coast map v13</title>
 <style>
-:root{--sea:#2ea8d0;--ink:#17372f;--panel:#fffdf9f2;--muted:#60776e}
+:root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
 html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--sea);font-family:system-ui,-apple-system,sans-serif;color:var(--ink)}
-#app{position:relative;width:100%;height:100%;background:linear-gradient(145deg,#45b5d8,#208fc2)}
+#app{position:relative;width:100%;height:100%;background:radial-gradient(circle at 50% 40%,#54c4e2 0%,#29a9d4 45%,#1688bd 100%)}
 svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-select:none;-webkit-user-select:none}
 .sea{fill:url(#oceanGradient)}
 .grid{fill:none;stroke:#d7f4fb;stroke-width:2;opacity:.10;vector-effect:non-scaling-stroke}
-.taxonPath{cursor:pointer;stroke:#fffdf2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke;transition:opacity .18s,filter .12s;filter:drop-shadow(0 1px 1px #0c668522)}
+.taxonPath{cursor:pointer;stroke:#fffdf2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke;transition:opacity .18s,filter .12s;filter:drop-shadow(0 1px 2px #075b7d35)}
 .taxonPath:hover{filter:brightness(1.045)}
-.continentHaloWide{fill:none;stroke:#b8ecf6;stroke-opacity:.22;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
-.continentHaloNear{fill:none;stroke:#fff8d8;stroke-opacity:.72;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
-.label{font-weight:750;fill:#18372f;pointer-events:none;paint-order:stroke;stroke:#fffdf8dd;stroke-width:2.5px;stroke-linejoin:round}
+.continentHaloWide{fill:none;stroke:#9de8f7;stroke-opacity:.30;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
+.continentHaloNear{fill:none;stroke:#fff5c7;stroke-opacity:.82;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
+.label{font-weight:760;fill:#18372f;pointer-events:none;paint-order:stroke;stroke:#fffdf8e8;stroke-width:2.4px;stroke-linejoin:round}
 .hidden{opacity:0;pointer-events:none}
 .top{position:absolute;left:16px;right:16px;top:14px;display:flex;gap:10px;align-items:center;pointer-events:none}
 .card{background:var(--panel);border:1px solid #35524723;border-radius:16px;box-shadow:0 9px 30px #3552471d;backdrop-filter:blur(11px);pointer-events:auto}
@@ -31,14 +31,23 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 <svg id="map" viewBox="0 0 2400 1500">
 <defs>
   <linearGradient id="oceanGradient" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0%" stop-color="#48badd"/>
-    <stop offset="48%" stop-color="#2ca4d0"/>
-    <stop offset="100%" stop-color="#218fbe"/>
+    <stop offset="0%" stop-color="#43bee3"/>
+    <stop offset="46%" stop-color="#22a7d4"/>
+    <stop offset="100%" stop-color="#1186ba"/>
   </linearGradient>
-  <radialGradient id="oceanGlow" cx="50%" cy="45%" r="70%">
-    <stop offset="0%" stop-color="#8edbef" stop-opacity=".18"/>
-    <stop offset="100%" stop-color="#087aa8" stop-opacity=".05"/>
+  <radialGradient id="oceanGlow" cx="50%" cy="42%" r="72%">
+    <stop offset="0%" stop-color="#b6eff8" stop-opacity=".22"/>
+    <stop offset="52%" stop-color="#55c6e2" stop-opacity=".10"/>
+    <stop offset="100%" stop-color="#0478a8" stop-opacity=".10"/>
   </radialGradient>
+  <filter id="landTexture" x="-8%" y="-8%" width="116%" height="116%">
+    <feTurbulence type="fractalNoise" baseFrequency="0.014 0.020" numOctaves="2" seed="7" result="noise"/>
+    <feColorMatrix in="noise" type="saturate" values="0" result="grey"/>
+    <feComponentTransfer in="grey" result="soft">
+      <feFuncA type="table" tableValues="0 0 .13"/>
+    </feComponentTransfer>
+    <feBlend in="SourceGraphic" in2="soft" mode="soft-light"/>
+  </filter>
 </defs>
 <rect class="sea" width="2400" height="1500"/>
 <rect width="2400" height="1500" fill="url(#oceanGlow)"/>
@@ -51,7 +60,7 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 <g id="halos"></g><g id="regions"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>organische atlas · iNaturalist-gewogen taxonomie</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>illustrated archipel · iNaturalist-gewogen taxonomie</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -87,10 +96,10 @@ function h2(s,k=0){return hash(String(s)+'|'+k)}
 function weight(t){return Math.max(.0001,+t.mapWeight||+t.weight||1)}
 
 const rootPalette={
-  Animalia:'#49bf98',
-  Plantae:'#63bf63',
-  Fungi:'#9a82cf',
-  Bacteria:'#638fd4'
+  Animalia:'#45c39b',
+  Plantae:'#58bb58',
+  Fungi:'#8f74cc',
+  Bacteria:'#5788d5'
 };
 const rankFallback={DOMAIN:'#89abc0',KINGDOM:'#8fb9d4',PHYLUM:'#98c4ad',CLASS:'#acd19e',ORDER:'#cbd993',FAMILY:'#bdd7ad',GENUS:'#d0dfbd',SPECIES:'#e1ead8',ROOT:'#eef3eb'};
 
@@ -111,10 +120,35 @@ function rootAncestor(t){
 function colorFor(t){
   const root=rootAncestor(t);
   const rootName=root?.canonicalName;
-  const base=rootPalette[rootName]||rankFallback[(t.rank||'').toUpperCase()]||'#a9cdb9';
+  let base=rootPalette[rootName]||rankFallback[(t.rank||'').toUpperCase()]||'#a9cdb9';
+
   const d=Math.max(0,t.depth||0);
-  const light=.035+.040*d+.12*h2(t.id,50);
-  return tint(base,Math.min(.36,light));
+  const r=(t.rank||'').toUpperCase();
+
+  /* The illustrated sketch is more colorful within Animalia and Plantae:
+     some lineages become yellow-green, others deep teal. */
+  let f=.025+.035*d+.10*h2(t.id,50);
+
+  if(rootName==='Animalia'){
+    const hue=h2(t.id,8100);
+    if(hue>.68) base='#9fce4f';
+    else if(hue<.24) base='#27b997';
+    else if(hue>.50) base='#7ecb70';
+  }else if(rootName==='Plantae'){
+    const hue=h2(t.id,8200);
+    if(hue>.72) base='#b4d95d';
+    else if(hue<.28) base='#36a957';
+    else if(hue>.50) base='#80ce68';
+  }else if(rootName==='Fungi'){
+    const hue=h2(t.id,8300);
+    if(hue>.58) base='#aa91df';
+    else if(hue<.28) base='#7658b7';
+  }else if(rootName==='Bacteria'){
+    const hue=h2(t.id,8400);
+    if(hue>.62) base='#7aa4e5';
+    else if(hue<.25) base='#3f74c9';
+  }
+  return tint(base,Math.min(.30,f));
 }
 
 function polygonArea(poly){let a=0;for(let i=0;i<poly.length;i++){const p=poly[i],q=poly[(i+1)%poly.length];a+=p.x*q.y-q.x*p.y}return a/2}
@@ -135,55 +169,75 @@ function pointInPoly(p,poly){
   return inside;
 }
 
-function organicBlob(cx,cy,rx,ry,id,detail=30){
+
+function organicBlob(cx,cy,rx,ry,id,detail=40){
   const pts=[];
   const phase=2*Math.PI*h2(id,7001);
   for(let i=0;i<detail;i++){
     const a=2*Math.PI*i/detail;
-    /* Always <= 1, so the blob stays inside its collision ellipse. */
-    let q=.87
+
+    /* More asymmetric, lumpy outlines resembling hand-painted islands. */
+    let q=.84
+      +.085*Math.sin(2*a+phase*.6)
       +.060*Math.sin(3*a+phase)
-      +.035*Math.sin(5*a-phase*.6)
-      +.024*Math.sin(8*a+phase*1.7)
-      +.030*(h2(id,7100+i)-.5);
-    q=Math.max(.72,Math.min(.985,q));
-    pts.push({x:cx+Math.cos(a)*rx*q,y:cy+Math.sin(a)*ry*q});
+      +.045*Math.sin(5*a-phase*.7)
+      +.026*Math.sin(9*a+phase*1.8)
+      +.034*(h2(id,7100+i)-.5);
+
+    /* occasional bays */
+    const bay=h2(id,7600+i);
+    if(bay>.88)q-=.10+.05*h2(id,7700+i);
+
+    q=Math.max(.62,Math.min(.985,q));
+    pts.push({
+      x:cx+Math.cos(a)*rx*q,
+      y:cy+Math.sin(a)*ry*q*(.90+.10*Math.sin(2*a+phase*.3))
+    });
   }
   return cleanPoly(pts);
 }
 
+function pointInPoly(p,poly){
+  let inside=false;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const a=poly[i],b=poly[j];
+    const hit=((a.y>p.y)!=(b.y>p.y)) &&
+      (p.x < (b.x-a.x)*(p.y-a.y)/(b.y-a.y+1e-12)+a.x);
+    if(hit)inside=!inside;
+  }
+  return inside;
+}
 function ellipseFits(poly,x,y,rx,ry){
   if(!pointInPoly({x,y},poly))return false;
-  const n=18;
+  const n=20;
   for(let i=0;i<n;i++){
     const a=2*Math.PI*i/n;
     if(!pointInPoly({x:x+Math.cos(a)*rx,y:y+Math.sin(a)*ry},poly))return false;
   }
   return true;
 }
-
 function nudgeInside(poly,item,center){
   let tries=0;
-  while(tries++<35 && !ellipseFits(poly,item.x,item.y,item.rx,item.ry)){
-    item.x=item.x*.90+center.x*.10;
-    item.y=item.y*.90+center.y*.10;
+  while(tries++<38&&!ellipseFits(poly,item.x,item.y,item.rx,item.ry)){
+    item.x=item.x*.91+center.x*.09;
+    item.y=item.y*.91+center.y*.09;
     if(tries%6===0){
-      item.rx*=.94;item.ry*=.94;item.bound=Math.max(item.rx,item.ry);
+      item.rx*=.95;item.ry*=.95;item.bound=Math.max(item.rx,item.ry);
     }
   }
 }
 
 function resolveCollisions(items,parentPoly,parentCenter){
-  for(let pass=0;pass<145;pass++){
+  for(let pass=0;pass<170;pass++){
     for(let i=0;i<items.length;i++){
       const a=items[i];
-      let fx=(parentCenter.x-a.x)*.0016,fy=(parentCenter.y-a.y)*.0016;
+      let fx=(parentCenter.x-a.x)*.0012,fy=(parentCenter.y-a.y)*.0012;
       for(let j=0;j<items.length;j++)if(i!==j){
         const b=items[j],dx=a.x-b.x,dy=a.y-b.y;
         const d=Math.hypot(dx,dy)||.001;
-        const min=(a.bound+b.bound)*1.055;
+        const min=(a.bound+b.bound)*1.02;
         if(d<min){
-          const push=(min-d)*.17;
+          const push=(min-d)*.19;
           fx+=dx/d*push;fy+=dy/d*push;
         }
       }
@@ -191,87 +245,102 @@ function resolveCollisions(items,parentPoly,parentCenter){
       if(pass%4===0)nudgeInside(parentPoly,a,parentCenter);
     }
   }
+}
 
-  /* Final safety pass: shrink only stubborn conflicts. */
-  for(let k=0;k<10;k++){
-    let changed=false;
-    for(let i=0;i<items.length;i++)for(let j=i+1;j<items.length;j++){
-      const a=items[i],b=items[j],d=Math.hypot(a.x-b.x,a.y-b.y);
-      if(d<(a.bound+b.bound)*1.015){
-        a.rx*=.965;a.ry*=.965;a.bound=Math.max(a.rx,a.ry);
-        b.rx*=.965;b.ry*=.965;b.bound=Math.max(b.rx,b.ry);
-        changed=true;
-      }
-    }
-    for(const a of items)nudgeInside(parentPoly,a,parentCenter);
-    if(!changed)break;
+function addSatelliteIslands(parentPoly,parentId,depth){
+  /* purely decorative tiny islands; no taxon ownership, pointer-events disabled */
+  const b=polyBBox(parentPoly),c=polygonCentroid(parentPoly);
+  const count=depth<=1?7:depth===2?4:0;
+  const sats=[];
+  for(let i=0;i<count;i++){
+    const a=2*Math.PI*h2(parentId,9000+i);
+    const rr=.42+.42*h2(parentId,9050+i);
+    const x=c.x+Math.cos(a)*b.w*.50*rr;
+    const y=c.y+Math.sin(a)*b.h*.50*rr;
+    const r=Math.max(4,Math.min(b.w,b.h)*(.018+.018*h2(parentId,9100+i)));
+    if(pointInPoly({x,y},parentPoly))continue;
+    sats.push({x,y,r,id:parentId+'sat'+i});
   }
+  return sats;
 }
 
 function packChildren(parentPoly,items,depth,parentId){
   if(!items.length)return;
+
   const area=absArea(parentPoly),box=polyBBox(parentPoly),center=polygonCentroid(parentPoly);
   const total=items.reduce((s,t)=>s+weight(t),0);
 
-  /* Deliberately leave open space, like seas/lakes between taxonomic regions. */
-  const fillRatio=depth<=1?.59:depth===2?.66:depth===3?.72:.76;
+  /* More dense than v15, but still leaves open water channels. */
+  const fillRatio=depth<=1?.70:depth===2?.75:depth===3?.79:.82;
   const usable=Math.max(1,area*fillRatio);
 
   const packed=items.map((t,i)=>{
     const share=weight(t)/total;
     const equivalent=Math.sqrt(usable*share/Math.PI);
-    const asp=.88+.24*h2(t.id,7201);
+
+    /* varied aspect ratio like the painted reference */
+    const asp=.72+.58*h2(t.id,7201);
     const rx=equivalent*Math.sqrt(asp);
     const ry=equivalent/Math.sqrt(asp);
+
+    /* Fibonacci-ish placement, but with stronger randomness */
     const ang=i*2.3999632297+2*Math.PI*h2(parentId,7300+i);
-    const radial=.29*Math.min(box.w,box.h)*Math.sqrt((i+.65)/(items.length+.5));
+    const radial=.35*Math.min(box.w,box.h)*Math.sqrt((i+.45)/(items.length+.25));
+    const wobble=.12*Math.min(box.w,box.h);
+
     return{
       t,rx,ry,bound:Math.max(rx,ry),
-      x:center.x+Math.cos(ang)*radial,
-      y:center.y+Math.sin(ang)*radial
+      x:center.x+Math.cos(ang)*radial+(h2(t.id,7401)-.5)*wobble,
+      y:center.y+Math.sin(ang)*radial+(h2(t.id,7402)-.5)*wobble
     };
   });
 
-  /* If the first guess is too ambitious, shrink the complete family until it fits. */
-  for(let round=0;round<8;round++){
+  for(let round=0;round<9;round++){
     for(const p of packed)nudgeInside(parentPoly,p,center);
     resolveCollisions(packed,parentPoly,center);
+
     let bad=false;
-    for(let i=0;i<packed.length;i++){
+    for(let i=0;i<packed.length&&!bad;i++){
       if(!ellipseFits(parentPoly,packed[i].x,packed[i].y,packed[i].rx,packed[i].ry)){bad=true;break}
       for(let j=i+1;j<packed.length;j++){
-        if(Math.hypot(packed[i].x-packed[j].x,packed[i].y-packed[j].y) <
-           (packed[i].bound+packed[j].bound)*1.005){bad=true;break}
+        if(Math.hypot(packed[i].x-packed[j].x,packed[i].y-packed[j].y)<
+           (packed[i].bound+packed[j].bound)*1.002){bad=true;break}
       }
-      if(bad)break;
     }
     if(!bad)break;
+
     for(const p of packed){
-      p.rx*=.92;p.ry*=.92;p.bound=Math.max(p.rx,p.ry);
-      p.x=p.x*.94+center.x*.06;p.y=p.y*.94+center.y*.06;
+      p.rx*=.935;p.ry*=.935;p.bound=Math.max(p.rx,p.ry);
+      p.x=p.x*.95+center.x*.05;p.y=p.y*.95+center.y*.05;
     }
   }
 
   for(const p of packed){
     const t=p.t;
     t.depth=depth;
-    t.poly=organicBlob(p.x,p.y,p.rx,p.ry,t.id,depth<2?36:28);
+    t.poly=organicBlob(p.x,p.y,p.rx,p.ry,t.id,depth<2?44:34);
     t.cellPoly=t.poly;
     const cs=children.get(String(t.id))||[];
     if(cs.length)packChildren(t.poly,cs,depth+1,String(t.id));
   }
 }
-
 function rootContinent(box,t,targetArea){
   const cx=box.x+box.w/2,cy=box.y+box.h/2;
-  /* Make the aspect ratio follow the anchor box while keeping area close to target. */
   const aspect=box.w/box.h;
+
   let rx=Math.sqrt(targetArea*aspect/Math.PI);
   let ry=Math.sqrt(targetArea/(aspect*Math.PI));
-  const maxRx=box.w*.48,maxRy=box.h*.48;
+
+  /* Keep ocean between continents like the sketch. */
+  const maxRx=box.w*.455,maxRy=box.h*.455;
   const s=Math.min(1,maxRx/rx,maxRy/ry);
   rx*=s;ry*=s;
-  return organicBlob(cx,cy,rx,ry,t.id,46);
+
+  /* Shift slightly to break a rigid grid composition. */
+  const jx=(h2(t.id,9500)-.5)*box.w*.06;
+  const jy=(h2(t.id,9501)-.5)*box.h*.06;
+
+  return organicBlob(cx+jx,cy+jy,rx,ry,t.id,54);
 }
 
 function layoutRootContinents(){
@@ -293,7 +362,7 @@ function layoutRootContinents(){
   ];
 
   const sum=top.reduce((s,t)=>s+weight(t),0);
-  const landBudget=2400*1500*.50;
+  const landBudget=2400*1500*.45;
 
   top.forEach((t,i)=>{
     const box=anchors[t.canonicalName]||fallback[i%fallback.length];
@@ -322,11 +391,11 @@ const elems=[];
   t.box=polyBBox(t.poly);t.center=polygonCentroid(t.poly);t.area=absArea(t.poly);
   if((t.depth||0)===0){
     const haloWide=document.createElementNS(NS,'path');
-    haloWide.setAttribute('d',pathFromPoly(t.poly));haloWide.setAttribute('class','continentHaloWide');haloWide.setAttribute('stroke-width','54');hg.appendChild(haloWide);
+    haloWide.setAttribute('d',pathFromPoly(t.poly));haloWide.setAttribute('class','continentHaloWide');haloWide.setAttribute('stroke-width','66');hg.appendChild(haloWide);
     const haloNear=document.createElementNS(NS,'path');
-    haloNear.setAttribute('d',pathFromPoly(t.poly));haloNear.setAttribute('class','continentHaloNear');haloNear.setAttribute('stroke-width','16');hg.appendChild(haloNear);
+    haloNear.setAttribute('d',pathFromPoly(t.poly));haloNear.setAttribute('class','continentHaloNear');haloNear.setAttribute('stroke-width','19');hg.appendChild(haloNear);
   }
-  const p=document.createElementNS(NS,'path');p.setAttribute('d',pathFromPoly(t.poly));p.setAttribute('fill',colorFor(t));p.setAttribute('class','taxonPath');p.setAttribute('stroke-width',Math.max(.9,6.5-(t.depth||0)*.72));p.dataset.minz=minZoom(t);p.dataset.id=t.id;p.onclick=e=>{e.stopPropagation();focus(t)};rg.appendChild(p);
+  const p=document.createElementNS(NS,'path');p.setAttribute('d',pathFromPoly(t.poly));p.setAttribute('fill',colorFor(t));p.setAttribute('fill-opacity',String(.92+.07*h2(t.id,11100)));p.setAttribute('class','taxonPath');p.setAttribute('filter','url(#landTexture)');p.setAttribute('stroke-width',Math.max(.9,6.5-(t.depth||0)*.72));p.dataset.minz=minZoom(t);p.dataset.id=t.id;p.onclick=e=>{e.stopPropagation();focus(t)};rg.appendChild(p);
   const text=document.createElementNS(NS,'text');text.setAttribute('x',t.center.x);text.setAttribute('y',t.center.y);text.setAttribute('text-anchor','middle');text.setAttribute('class','label');text.textContent=t.vernacularName||t.canonicalName;text.dataset.minz=(minZoom(t)*1.02);text.dataset.id=t.id;lg.appendChild(text);
   elems.push({t,p,text})
 });
@@ -356,7 +425,7 @@ svg.onpointerdown=e=>{svg.setPointerCapture?.(e.pointerId);ptr.set(e.pointerId,{
 svg.onpointermove=e=>{if(!ptr.has(e.pointerId))return;ptr.set(e.pointerId,{x:e.clientX,y:e.clientY});if(ptr.size===2&&pinch){let p=[...ptr.values()],d=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y),sc=pinch.d/d,r=svg.getBoundingClientRect(),px=(pinch.cx-r.left)/r.width,py=(pinch.cy-r.top)/r.height,wx=pinch.v.x+px*pinch.v.w,wy=pinch.v.y+py*pinch.v.h;target.w=Math.max(24,Math.min(3000,pinch.v.w*sc));target.h=Math.max(15,Math.min(1900,pinch.v.h*sc));target.x=wx-px*target.w;target.y=wy-py*target.h}else if(drag){let dx=e.clientX-last.x,dy=e.clientY-last.y;target.x-=dx/innerWidth*target.w;target.y-=dy/innerHeight*target.h;last={x:e.clientX,y:e.clientY}}};
 function end(e){ptr.delete(e.pointerId);if(ptr.size<2)pinch=null;if(!ptr.size){drag=false;last=null}}svg.onpointerup=end;svg.onpointercancel=end;
 function anim(){let k=.16;view.x+=(target.x-view.x)*k;view.y+=(target.y-view.y)*k;view.w+=(target.w-view.w)*k;view.h+=(target.h-view.h)*k;svg.setAttribute('viewBox',`${view.x} ${view.y} ${view.w} ${view.h}`);let z=2400/view.w;zoomEl.textContent=z.toFixed(2)+'×';semantic(z);requestAnimationFrame(anim)}
-status.textContent=`${payload.meta.taxa||taxa.length} taxa · organische atlas · open oceaan · orde-oppervlakte: iNaturalist · 10× = 2× ruimte`;
+status.textContent=`${payload.meta.taxa||taxa.length} taxa · illustrated atlas · open oceaan · orde-oppervlakte: iNaturalist · 10× = 2× ruimte`;
 home();requestAnimationFrame(anim);
 })();
 </script></body></html>
