@@ -4,15 +4,17 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
 <title>Atlas of Life — wild coast map v13</title>
 <style>
-:root{--sea:#dfece8;--ink:#17372f;--panel:#fffdf9ee;--muted:#60776e}
+:root{--sea:#2ea8d0;--ink:#17372f;--panel:#fffdf9f2;--muted:#60776e}
 *{box-sizing:border-box}
 html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--sea);font-family:system-ui,-apple-system,sans-serif;color:var(--ink)}
-#app{position:relative;width:100%;height:100%;background:linear-gradient(145deg,#f4f6ef,#d9e8e5)}
+#app{position:relative;width:100%;height:100%;background:linear-gradient(145deg,#45b5d8,#208fc2)}
 svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-select:none;-webkit-user-select:none}
-.sea{fill:#deebe7}
-.grid{fill:none;stroke:#5e7e73;stroke-width:1;opacity:.07;vector-effect:non-scaling-stroke}
-.taxonPath{cursor:pointer;stroke:#fffdf8;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke;transition:opacity .18s,filter .12s}
-.taxonPath:hover{filter:brightness(1.035)}
+.sea{fill:url(#oceanGradient)}
+.grid{fill:none;stroke:#d7f4fb;stroke-width:2;opacity:.10;vector-effect:non-scaling-stroke}
+.taxonPath{cursor:pointer;stroke:#fffdf2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke;transition:opacity .18s,filter .12s;filter:drop-shadow(0 1px 1px #0c668522)}
+.taxonPath:hover{filter:brightness(1.045)}
+.continentHaloWide{fill:none;stroke:#b8ecf6;stroke-opacity:.22;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
+.continentHaloNear{fill:none;stroke:#fff8d8;stroke-opacity:.72;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
 .label{font-weight:750;fill:#18372f;pointer-events:none;paint-order:stroke;stroke:#fffdf8dd;stroke-width:2.5px;stroke-linejoin:round}
 .hidden{opacity:0;pointer-events:none}
 .top{position:absolute;left:16px;right:16px;top:14px;display:flex;gap:10px;align-items:center;pointer-events:none}
@@ -27,16 +29,29 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 </style></head>
 <body><div id="app">
 <svg id="map" viewBox="0 0 2400 1500">
+<defs>
+  <linearGradient id="oceanGradient" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#48badd"/>
+    <stop offset="48%" stop-color="#2ca4d0"/>
+    <stop offset="100%" stop-color="#218fbe"/>
+  </linearGradient>
+  <radialGradient id="oceanGlow" cx="50%" cy="45%" r="70%">
+    <stop offset="0%" stop-color="#8edbef" stop-opacity=".18"/>
+    <stop offset="100%" stop-color="#087aa8" stop-opacity=".05"/>
+  </radialGradient>
+</defs>
 <rect class="sea" width="2400" height="1500"/>
+<rect width="2400" height="1500" fill="url(#oceanGlow)"/>
 <g class="grid">
-  <path d="M0 300 C600 245 1650 350 2400 280"/>
-  <path d="M0 730 C700 650 1700 810 2400 700"/>
-  <path d="M0 1130 C650 1060 1700 1200 2400 1090"/>
+  <path d="M-80 260 C440 170 840 335 1270 260 S2040 160 2480 280"/>
+  <path d="M-90 520 C520 430 900 610 1430 515 S2070 470 2490 560"/>
+  <path d="M-100 850 C470 760 980 920 1450 835 S2010 745 2490 890"/>
+  <path d="M-120 1200 C520 1080 980 1260 1510 1175 S2080 1090 2510 1210"/>
 </g>
-<g id="regions"></g><g id="labels"></g>
+<g id="halos"></g><g id="regions"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>wilde kusten · iNaturalist-gewogen taxonomische kaart</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>archipelkaart · iNaturalist-gewogen taxonomie</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -49,7 +64,7 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 (async()=>{
 const NS='http://www.w3.org/2000/svg';
 const svg=document.getElementById('map');
-const rg=document.getElementById('regions'), lg=document.getElementById('labels');
+const hg=document.getElementById('halos'), rg=document.getElementById('regions'), lg=document.getElementById('labels');
 const status=document.getElementById('status'), zoomEl=document.getElementById('zoom');
 const levelEl=document.getElementById('level'), crumbs=document.getElementById('crumbs');
 
@@ -71,8 +86,35 @@ function hash(s){let h=2166136261;for(const c of String(s)){h^=c.charCodeAt(0);h
 function h2(s,k=0){return hash(String(s)+'|'+k)}
 function weight(t){return Math.max(.0001,+t.mapWeight||+t.weight||1)}
 
-const palette={DOMAIN:'#9eb9c4',KINGDOM:'#8fb9d4',PHYLUM:'#96c2ae',CLASS:'#a6cda0',ORDER:'#ccd995',FAMILY:'#bbd7ad',GENUS:'#cbdcbd',SPECIES:'#dfe9d8',ROOT:'#eef3eb'};
-function tint(hex,f){let n=parseInt(hex.slice(1),16),r=n>>16,g=(n>>8)&255,b=n&255;return`rgb(${Math.round(r+(255-r)*f)},${Math.round(g+(255-g)*f)},${Math.round(b+(255-b)*f)})`}
+const rootPalette={
+  Animalia:'#56c69a',
+  Plantae:'#69bf68',
+  Fungi:'#9b88cf',
+  Bacteria:'#709ed9'
+};
+const rankFallback={DOMAIN:'#89abc0',KINGDOM:'#8fb9d4',PHYLUM:'#98c4ad',CLASS:'#acd19e',ORDER:'#cbd993',FAMILY:'#bdd7ad',GENUS:'#d0dfbd',SPECIES:'#e1ead8',ROOT:'#eef3eb'};
+
+function tint(hex,f){
+  let n=parseInt(hex.slice(1),16),r=n>>16,g=(n>>8)&255,b=n&255;
+  return`rgb(${Math.round(r+(255-r)*f)},${Math.round(g+(255-g)*f)},${Math.round(b+(255-b)*f)})`
+}
+function rootAncestor(t){
+  let cur=t,last=t;
+  while(cur&&cur.parentId&&byId.has(String(cur.parentId))){
+    last=cur;
+    const p=byId.get(String(cur.parentId));
+    if(!p||p.id==='__life')break;
+    cur=p;
+  }
+  return cur||last;
+}
+function colorFor(t){
+  const root=rootAncestor(t);
+  const base=rootPalette[root?.canonicalName]||rankFallback[(t.rank||'').toUpperCase()]||'#a9cdb9';
+  const d=Math.max(0,t.depth||0);
+  const variation=.03+.055*d+.16*h2(t.id,50);
+  return tint(base,Math.min(.48,variation));
+}
 
 function polygonArea(poly){let a=0;for(let i=0;i<poly.length;i++){const p=poly[i],q=poly[(i+1)%poly.length];a+=p.x*q.y-q.x*p.y}return a/2}
 function absArea(poly){return Math.abs(polygonArea(poly))}
@@ -256,9 +298,81 @@ function partition(poly,items,depth,parentId){
   partition(pA,A,depth,parentId+'L');partition(pB,B,depth,parentId+'R')
 }
 
-function outerWorld(){return[{x:16,y:16},{x:2384,y:16},{x:2384,y:1484},{x:16,y:1484}]}
-roots[0].poly=outerWorld();
-partition(roots[0].poly,children.get(String(roots[0].id))||[],0,'Life');
+/* V14: the four main roots become separate continents in fixed, non-overlapping
+   anchor zones. Their polygon areas still follow mapWeight; the rest of the
+   rectangle remains true open ocean. */
+function blobInBox(box,id,targetArea){
+  const cx=box.x+box.w/2,cy=box.y+box.h/2;
+  const n=42,unit=[];
+  const phase=2*Math.PI*h2(id,6100);
+  for(let i=0;i<n;i++){
+    const a=2*Math.PI*i/n;
+    /* Layer several deterministic harmonics: this creates broad bays and capes,
+       not merely a noisy ellipse. */
+    let r=1
+      +.115*Math.sin(3*a+phase)
+      +.075*Math.sin(5*a-phase*.7)
+      +.045*Math.sin(9*a+phase*1.3)
+      +.065*(h2(id,6200+i)-.5);
+    r=Math.max(.72,Math.min(1.18,r));
+    unit.push({
+      x:Math.cos(a)*r,
+      y:Math.sin(a)*r*(.90+.18*Math.sin(2*a+phase*.4))
+    });
+  }
+
+  /* Start with the largest safe shape for this anchor. */
+  const rx=box.w*.47,ry=box.h*.47;
+  let poly=unit.map(p=>({x:cx+p.x*rx,y:cy+p.y*ry}));
+  const a0=Math.max(1,absArea(poly));
+  let scale=Math.sqrt(Math.max(1,targetArea)/a0);
+  scale=Math.min(1,Math.max(.24,scale));
+  poly=poly.map(p=>({x:cx+(p.x-cx)*scale,y:cy+(p.y-cy)*scale}));
+
+  /* One inward erosion pass adds fjords while guaranteeing the continent
+     remains in its own anchor zone. */
+  const c=polygonCentroid(poly),b=polyBBox(poly);
+  poly=poly.map((p,i)=>{
+    const bay=h2(id,6500+i);
+    const pull=(bay>.76?.040+.050*h2(id,6800+i):.004+.014*h2(id,6900+i))*Math.min(b.w,b.h);
+    const dx=c.x-p.x,dy=c.y-p.y,d=Math.hypot(dx,dy)||1;
+    return{x:p.x+dx/d*pull,y:p.y+dy/d*pull};
+  });
+  return cleanPoly(poly);
+}
+
+function layoutRootContinents(){
+  const top=children.get(String(roots[0].id))||[];
+  if(!top.length)return;
+
+  const anchors={
+    Plantae:{x:28,y:80,w:790,h:720},
+    Animalia:{x:760,y:65,w:1580,h:930},
+    Fungi:{x:28,y:830,w:790,h:625},
+    Bacteria:{x:1580,y:1010,w:790,h:440}
+  };
+  const fallback=[
+    {x:40,y:80,w:760,h:650},
+    {x:820,y:80,w:1500,h:850},
+    {x:40,y:850,w:720,h:560},
+    {x:1640,y:1020,w:700,h:400}
+  ];
+
+  const sum=top.reduce((s,t)=>s+weight(t),0);
+  const worldArea=2400*1500;
+  const landBudget=worldArea*.56;
+
+  top.forEach((t,i)=>{
+    const box=anchors[t.canonicalName]||fallback[i%fallback.length];
+    const target=landBudget*(weight(t)/sum);
+    t.depth=0;
+    t.poly=blobInBox(box,t.id,target);
+    t.cellPoly=t.poly;
+    const cs=children.get(String(t.id))||[];
+    if(cs.length)partition(t.poly,cs,1,String(t.id));
+  });
+}
+layoutRootContinents();
 
 function pathFromPoly(poly){
   if(!poly||poly.length<3)return'';
@@ -273,7 +387,13 @@ const elems=[];
 [...taxa].sort((a,b)=>(a.depth||0)-(b.depth||0)).forEach(t=>{
   if(t.id==='__life'||!t.poly||t.poly.length<3)return;
   t.box=polyBBox(t.poly);t.center=polygonCentroid(t.poly);t.area=absArea(t.poly);
-  const p=document.createElementNS(NS,'path');p.setAttribute('d',pathFromPoly(t.poly));p.setAttribute('fill',tint(palette[t.rank]||'#b7d0c2',.02+.13*h2(t.id,50)));p.setAttribute('class','taxonPath');p.setAttribute('stroke-width',Math.max(1,8-(t.depth||0)));p.dataset.minz=minZoom(t);p.dataset.id=t.id;p.onclick=e=>{e.stopPropagation();focus(t)};rg.appendChild(p);
+  if((t.depth||0)===0){
+    const haloWide=document.createElementNS(NS,'path');
+    haloWide.setAttribute('d',pathFromPoly(t.poly));haloWide.setAttribute('class','continentHaloWide');haloWide.setAttribute('stroke-width','34');hg.appendChild(haloWide);
+    const haloNear=document.createElementNS(NS,'path');
+    haloNear.setAttribute('d',pathFromPoly(t.poly));haloNear.setAttribute('class','continentHaloNear');haloNear.setAttribute('stroke-width','11');hg.appendChild(haloNear);
+  }
+  const p=document.createElementNS(NS,'path');p.setAttribute('d',pathFromPoly(t.poly));p.setAttribute('fill',colorFor(t));p.setAttribute('class','taxonPath');p.setAttribute('stroke-width',Math.max(1,8-(t.depth||0)));p.dataset.minz=minZoom(t);p.dataset.id=t.id;p.onclick=e=>{e.stopPropagation();focus(t)};rg.appendChild(p);
   const text=document.createElementNS(NS,'text');text.setAttribute('x',t.center.x);text.setAttribute('y',t.center.y);text.setAttribute('text-anchor','middle');text.setAttribute('class','label');text.textContent=t.vernacularName||t.canonicalName;text.dataset.minz=(minZoom(t)*1.02);text.dataset.id=t.id;lg.appendChild(text);
   elems.push({t,p,text})
 });
@@ -294,7 +414,7 @@ function semantic(z){
   for(const o of elems){
     const visible=z>=+o.p.dataset.minz;o.p.classList.toggle('hidden',!visible);if(visible)deepest=Math.max(deepest,o.t.depth||0);
     const screenW=(o.t.box?.w||0)*z,screenH=(o.t.box?.h||0)*z,labelVisible=visible&&z>=+o.text.dataset.minz&&screenW>62&&screenH>26;
-    o.text.classList.toggle('hidden',!labelVisible);if(labelVisible){const fs=Math.max(8,Math.min(22,8.5+Math.sqrt(Math.max(20,Math.min(screenW,screenH)*2))/4.4));o.text.setAttribute('font-size',fs/z)}
+    o.text.classList.toggle('hidden',!labelVisible);if(labelVisible){let fs=Math.max(8,Math.min(22,8.5+Math.sqrt(Math.max(20,Math.min(screenW,screenH)*2))/4.4));if((o.t.depth||0)===0)fs=Math.max(fs,29);else if((o.t.depth||0)===1)fs=Math.max(fs,19);o.text.setAttribute('font-size',fs/z)}
   }
   if(!crumbs.children.length){const names=['rijk/domein','stam','klasse','orde','familie','genus','soort'];levelEl.textContent=names[Math.min(names.length-1,Math.max(0,deepest))]||'wereld'}
 }
@@ -303,7 +423,7 @@ svg.onpointerdown=e=>{svg.setPointerCapture?.(e.pointerId);ptr.set(e.pointerId,{
 svg.onpointermove=e=>{if(!ptr.has(e.pointerId))return;ptr.set(e.pointerId,{x:e.clientX,y:e.clientY});if(ptr.size===2&&pinch){let p=[...ptr.values()],d=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y),sc=pinch.d/d,r=svg.getBoundingClientRect(),px=(pinch.cx-r.left)/r.width,py=(pinch.cy-r.top)/r.height,wx=pinch.v.x+px*pinch.v.w,wy=pinch.v.y+py*pinch.v.h;target.w=Math.max(24,Math.min(3000,pinch.v.w*sc));target.h=Math.max(15,Math.min(1900,pinch.v.h*sc));target.x=wx-px*target.w;target.y=wy-py*target.h}else if(drag){let dx=e.clientX-last.x,dy=e.clientY-last.y;target.x-=dx/innerWidth*target.w;target.y-=dy/innerHeight*target.h;last={x:e.clientX,y:e.clientY}}};
 function end(e){ptr.delete(e.pointerId);if(ptr.size<2)pinch=null;if(!ptr.size){drag=false;last=null}}svg.onpointerup=end;svg.onpointercancel=end;
 function anim(){let k=.16;view.x+=(target.x-view.x)*k;view.y+=(target.y-view.y)*k;view.w+=(target.w-view.w)*k;view.h+=(target.h-view.h)*k;svg.setAttribute('viewBox',`${view.x} ${view.y} ${view.w} ${view.h}`);let z=2400/view.w;zoomEl.textContent=z.toFixed(2)+'×';semantic(z);requestAnimationFrame(anim)}
-status.textContent=`${payload.meta.taxa||taxa.length} taxa · wilde kusten · open ruimte · orde-oppervlakte: iNaturalist · 10× = 2× ruimte`;
+status.textContent=`${payload.meta.taxa||taxa.length} taxa · archipelkaart · open oceaan · orde-oppervlakte: iNaturalist · 10× = 2× ruimte`;
 home();requestAnimationFrame(anim);
 })();
 </script></body></html>
