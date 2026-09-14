@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — verspreide verfijnde rijken v33</title>
+<title>Atlas of Life — echte verfijnde kustlijnen v34</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -59,7 +59,7 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 <g id="halos"></g><g id="regions"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v33 · verspreide eilanden · omtrek 100×</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v34 · echte kustdetails · omtrek 100×</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1444,7 +1444,7 @@ function pathFromPoly(poly){
   for(let i=0;i<poly.length;i++)d+=` Q${poly[i].x},${poly[i].y} ${mids[i].x},${mids[i].y}`;
   return d+'Z'
 }
-function refineContour(poly,factor=100){
+function refineContour(poly,factor=100,seed='coast'){
   if(!poly||poly.length<3||factor<=1)return poly;
   const out=[],n=poly.length;
   for(let i=0;i<n;i++){
@@ -1457,7 +1457,24 @@ function refineContour(poly,factor=100){
       });
     }
   }
-  return out;
+  /* The extra samples now carry real geometry. Several unrelated wave
+     lengths create broad bays, smaller peninsulas and fine coastal detail. */
+  const centre=polygonCentroid(out),originalArea=absArea(poly);
+  const phases=[21001,21002,21003,21004].map(k=>2*Math.PI*h2(seed,k));
+  const detailed=out.map((p,i)=>{
+    const u=2*Math.PI*i/out.length;
+    const coast=.044*Math.sin(7*u+phases[0])
+      +.024*Math.sin(17*u+phases[1])
+      +.012*Math.sin(37*u+phases[2])
+      +.006*Math.sin(83*u+phases[3]);
+    return{x:centre.x+(p.x-centre.x)*(1+coast),
+           y:centre.y+(p.y-centre.y)*(1+coast)};
+  });
+
+  /* Roughening may change area slightly; scale it back exactly. */
+  const scale=Math.sqrt(originalArea/Math.max(1e-9,absArea(detailed)));
+  return detailed.map(p=>({x:centre.x+(p.x-centre.x)*scale,
+                           y:centre.y+(p.y-centre.y)*scale}));
 }
 function minZoom(t){
   const d=Math.max(0,t.depth||0);
@@ -1470,7 +1487,7 @@ const elems=[];
 [...taxa].sort((a,b)=>(a.depth||0)-(b.depth||0)).forEach(t=>{
   if(t.id==='__life'||!t.poly||t.poly.length<3)return;
   t.box=polyBBox(t.poly);t.center=polygonCentroid(t.poly);t.area=absArea(t.poly);
-  const drawnPoly=(t.depth||0)===0?refineContour(t.poly,100):t.poly;
+  const drawnPoly=(t.depth||0)===0?refineContour(t.poly,100,t.id):t.poly;
   if((t.depth||0)===0){
     const haloWide=document.createElementNS(NS,'path');
     haloWide.setAttribute('d',pathFromPoly(drawnPoly));haloWide.setAttribute('class','continentHaloWide');haloWide.setAttribute('stroke-width','40');hg.appendChild(haloWide);
@@ -1517,7 +1534,7 @@ function anim(){let k=.16;view.x+=(target.x-view.x)*k;view.y+=(target.y-view.y)*
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
   status.textContent=`${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v33 · scattered minor kingdoms · kingdom contours refined 100×',payload.meta.worldLandFraction);
+console.log('Atlas v34 · real multiscale coast detail · kingdom contours refined 100×',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
