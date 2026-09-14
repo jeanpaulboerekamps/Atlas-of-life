@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — blijvende geometrische kustlijnen v42.2</title>
+<title>Atlas of Life — blijvende geometrische kustlijnen v43</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -81,7 +81,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v42.2 · families · genera · soorten</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v43 · families · genera · soorten</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1537,6 +1537,12 @@ function contourFactorFor(t){
 const elems=[];
 const renderedIds=new Set();
 
+/* v43: species geometry may be loaded without immediately creating thousands
+   of SVG nodes. Species are materialised only inside genera that are actually
+   large enough on screen. */
+const deferredSpeciesByGenus=new Map();
+const deferredSpeciesIds=new Set();
+
 function renderTaxon(t){
   if(!t||t.id==='__life'||!t.poly||t.poly.length<3)return;
   const sid=String(t.id);
@@ -1623,7 +1629,11 @@ function updateFocusUi(t){
     levelEl.textContent=`orde · ${Number(t.inatObservationCount).toLocaleString('nl-NL')} iNat-waarnemingen · gewicht ${Number(t.inatAreaWeight||1).toFixed(2)}`
   }else{
     const cov=t.childLandFraction;
-    levelEl.textContent=(t.rank||'taxon').toLowerCase()+
+    const rr=(t.rank||'taxon').toLowerCase();
+    const sc=(+t.speciesCount>0 && ['family','genus'].includes(rr))
+      ? ` · ${Number(t.speciesCount).toLocaleString('nl-NL')} soorten`
+      : '';
+    levelEl.textContent=rr+sc+
       (cov!=null?` · land ${(cov*100).toFixed(1)}% · open ${((1-cov)*100).toFixed(1)}%`:'');
   }
 }
@@ -1633,7 +1643,13 @@ function focus(t,instant=false){
 
   const rr=(t.rank||'').toUpperCase();
   if(rr==='ORDER')ensureOrderDetails(t);
+  else if(rr==='FAMILY')ensureFamilySpecies(t);
   else if(rr==='GENUS')ensureGenusSpecies(t);
+  else if(rr==='SPECIES'){
+    const genus=byId.get(String(t.parentId));
+    if(genus)materialiseSpeciesForGenus(genus,2400/r.w,t);
+    renderTaxon(t);
+  }
 
   if(instant){
     /* Search navigation is a jump, not an animated fly-to. On iPad/Safari
@@ -1659,7 +1675,7 @@ function norm(s){return String(s||'').toLowerCase().normalize('NFD').replace(/[\
 
 
 /* =====================================================================
-   v42 LAZY DETAIL ENGINE
+   v43 DEEP LAZY DETAIL ENGINE
    ---------------------------------------------------------------------
    Base map stays light: world -> ORDER is loaded from data/taxa.json.
 
@@ -1832,8 +1848,18 @@ function layoutLazyChildren(parent){
     c.box=polyBBox(c.poly);
     c.center=polygonCentroid(c.poly);
     c.area=absArea(c.poly);
-    renderTaxon(c);
-    layoutLazyChildren(c);
+
+    if(detailRank(c)==='SPECIES'){
+      const gid=String(c.parentId);
+      if(!deferredSpeciesByGenus.has(gid))deferredSpeciesByGenus.set(gid,[]);
+      if(!deferredSpeciesIds.has(String(c.id))){
+        deferredSpeciesIds.add(String(c.id));
+        deferredSpeciesByGenus.get(gid).push(c);
+      }
+    }else{
+      renderTaxon(c);
+      layoutLazyChildren(c);
+    }
   }
 
   /* Existing element boxes may have changed after detail layout. */
@@ -1934,8 +1960,10 @@ async function ensureFamilySpecies(familyOrId){
       layoutLazyChildren(family);
 
       mergeSearchRows(added);
+      const z=2400/view.w;
+      materialiseVisibleSpecies(z);
       lastSemantic=-1;
-      semantic(2400/view.w,true);
+      semantic(z,true);
       return family;
     }catch(err){
       console.warn('Family species error',id,err);
@@ -1960,6 +1988,50 @@ async function ensureGenusSpecies(genusOrId){
   return genus;
 }
 
+
+function materialiseSpeciesForGenus(genus,z,forceOne=null){
+  if(!genus)return 0;
+  const gid=String(genus.id);
+  const list=deferredSpeciesByGenus.get(gid)||[];
+  if(!list.length)return 0;
+
+  const sw=(genus.box?.w||0)*z;
+  const sh=(genus.box?.h||0)*z;
+
+  /* Only build species SVG nodes when a genus is genuinely explorable.
+     A searched species can force just itself to materialise immediately. */
+  if(!forceOne && (z<7.2 || sw<260 || sh<140))return 0;
+
+  let made=0;
+  for(const s of list){
+    if(forceOne && String(s.id)!==String(forceOne.id))continue;
+    if(renderedIds.has(String(s.id)))continue;
+
+    if(forceOne || intersectsView(s.box,view,.24)){
+      renderTaxon(s);
+      made++;
+    }
+  }
+  return made;
+}
+
+function materialiseVisibleSpecies(z){
+  if(z<7.2)return 0;
+  let made=0;
+
+  /* Iterate visible rendered genera only, never the complete species pool. */
+  for(const o of elems){
+    if(detailRank(o.t)!=='GENUS')continue;
+    if(o.p.style.display==='none')continue;
+    made+=materialiseSpeciesForGenus(o.t,z);
+  }
+
+  if(made){
+    lastSemantic=-1;
+  }
+  return made;
+}
+
 /* Load details automatically only when the screen area is large enough.
    This preserves the v40/v41 performance improvements. */
 let detailAutoLoadBusy=false;
@@ -1978,7 +2050,9 @@ async function maybeLoadVisibleDetails(z){
 
     if(r==='ORDER'&&!loadedOrders.has(String(o.t.id))&&z>=2.5&&sw>320){
       if(score>candidateScore){candidate={kind:'order',t:o.t};candidateScore=score}
-    }else if(r==='GENUS'&&z>=7&&sw>360){
+    }else if(r==='FAMILY'&&!loadedFamilies.has(String(o.t.id))&&z>=5.8&&sw>380){
+      if(score>candidateScore){candidate={kind:'family',t:o.t};candidateScore=score}
+    }else if(r==='GENUS'&&z>=6.8&&sw>300){
       const fam=byId.get(String(o.t.parentId));
       if(fam&&detailRank(fam)==='FAMILY'&&!loadedFamilies.has(String(fam.id))){
         if(score>candidateScore){candidate={kind:'family',t:fam};candidateScore=score}
@@ -2024,7 +2098,13 @@ async function findLazyTaxon(q){
   if(hit.r==='SPECIES'&&hit.f)
     await ensureFamilySpecies(hit.f);
 
-  return byId.get(String(hit.id))||null;
+  const taxon=byId.get(String(hit.id))||null;
+  if(taxon&&detailRank(taxon)==='SPECIES'){
+    const genus=byId.get(String(taxon.parentId));
+    if(genus)materialiseSpeciesForGenus(genus,Math.max(8,2400/view.w),taxon);
+    renderTaxon(taxon);
+  }
+  return taxon;
 }
 
 /* v40: normalize names once instead of repeatedly normalizing ~2,000 taxa
@@ -2108,6 +2188,10 @@ function semantic(z,force=false){
 
   /* Never block the render loop on network I/O. */
   if(z>=2.5)queueMicrotask(()=>maybeLoadVisibleDetails(z));
+  if(z>=7.2)queueMicrotask(()=>{
+    const made=materialiseVisibleSpecies(z);
+    if(made)requestAnimationFrame(()=>semantic(z,true));
+  });
 }
 
 /* v41 manual-navigation fast path */
@@ -2237,7 +2321,7 @@ function anim(ts){
   const landPct=Math.max(0,Math.min(100,100*(payload.meta.worldLandFraction||0)));
   const openPct=100-landPct;
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
-  status.textContent=`v42.2 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
+  status.textContent=`v43 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
 console.log('Atlas v42 · lazy family/genus/species + lightweight interaction · kingdom through order',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
