@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — acht gewogen rijken v32</title>
+<title>Atlas of Life — verspreide verfijnde rijken v33</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -59,7 +59,7 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 <g id="halos"></g><g id="regions"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v32 · 8 rijken · kleine rijken elk 0,5%</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v33 · verspreide eilanden · omtrek 100×</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1262,6 +1262,62 @@ computeRecursiveCoverage();
     layoutSubtree(t,cell,coverageForRank(t));
   }
 
+  /* Spread the five small realms through separate ocean areas. Their complete
+     descendant trees move with them, so geometry and the exact 0.5% root-cell
+     allocations remain unchanged. */
+  function segmentCross(a,b,c,d){
+    const cross=(p,q,r)=>(q.x-p.x)*(r.y-p.y)-(q.y-p.y)*(r.x-p.x);
+    const ab1=cross(a,b,c),ab2=cross(a,b,d),cd1=cross(c,d,a),cd2=cross(c,d,b);
+    return ((ab1>1e-7&&ab2< -1e-7)||(ab1< -1e-7&&ab2>1e-7))&&
+           ((cd1>1e-7&&cd2< -1e-7)||(cd1< -1e-7&&cd2>1e-7));
+  }
+  function polygonsOverlap(a,b){
+    const A=polyBBox(a),B=polyBBox(b);
+    if(A.x+A.w<B.x||B.x+B.w<A.x||A.y+A.h<B.y||B.y+B.h<A.y)return false;
+    if(pointInPoly(a[0],b)||pointInPoly(b[0],a))return true;
+    for(let i=0;i<a.length;i++)for(let j=0;j<b.length;j++){
+      if(segmentCross(a[i],a[(i+1)%a.length],b[j],b[(j+1)%b.length]))return true;
+    }
+    return false;
+  }
+  function translateTree(t,dx,dy){
+    const move=poly=>poly?.map(p=>({x:p.x+dx,y:p.y+dy}));
+    if(t.poly)t.poly=move(t.poly);
+    if(t.cellPoly)t.cellPoly=move(t.cellPoly);
+    for(const c of children.get(String(t.id))||[])translateTree(c,dx,dy);
+  }
+  function clearancePoly(poly){
+    const c=polygonCentroid(poly);
+    return poly.map(p=>({x:c.x+(p.x-c.x)*1.16,y:c.y+(p.y-c.y)*1.16}));
+  }
+
+  const spreadTargets={
+    Bacteria:{x:1180,y:120},Archaea:{x:2260,y:390},
+    Chromista:{x:2220,y:1160},Protozoa:{x:1060,y:1380},
+    Viruses:{x:150,y:760}
+  };
+  const majorPolys=top.filter(t=>majorNames.has(t.canonicalName)).map(t=>t.poly);
+  const placed=[];
+  for(const name of ['Bacteria','Archaea','Chromista','Protozoa','Viruses']){
+    const t=top.find(x=>x.canonicalName===name);
+    if(!t?.poly)continue;
+    const centre=polygonCentroid(t.poly),target=spreadTargets[name];
+    const candidates=[target];
+    for(let y=70;y<=1430;y+=55)for(let x=70;x<=2330;x+=55)candidates.push({x,y});
+    candidates.sort((a,b)=>(a.x-target.x)**2+(a.y-target.y)**2-((b.x-target.x)**2+(b.y-target.y)**2));
+
+    let chosen=null;
+    for(const q of candidates){
+      const dx=q.x-centre.x,dy=q.y-centre.y;
+      const candidate=clearancePoly(t.poly.map(p=>({x:p.x+dx,y:p.y+dy})));
+      const box=polyBBox(candidate);
+      if(box.x<18||box.y<18||box.x+box.w>2382||box.y+box.h>1482)continue;
+      if([...majorPolys,...placed].some(p=>polygonsOverlap(candidate,p)))continue;
+      chosen={dx,dy,poly:candidate};break;
+    }
+    if(chosen){translateTree(t,chosen.dx,chosen.dy);placed.push(chosen.poly)}
+  }
+
   /* ---------- bottom-up rebuild ABOVE order ----------
      Orders occupy 50% of their class; all other transitions keep 85%.
      Rebuild the parent outline to that exact child/parent relationship,
@@ -1388,6 +1444,21 @@ function pathFromPoly(poly){
   for(let i=0;i<poly.length;i++)d+=` Q${poly[i].x},${poly[i].y} ${mids[i].x},${mids[i].y}`;
   return d+'Z'
 }
+function refineContour(poly,factor=100){
+  if(!poly||poly.length<3||factor<=1)return poly;
+  const out=[],n=poly.length;
+  for(let i=0;i<n;i++){
+    const p0=poly[(i-1+n)%n],p1=poly[i],p2=poly[(i+1)%n],p3=poly[(i+2)%n];
+    for(let j=0;j<factor;j++){
+      const u=j/factor,u2=u*u,u3=u2*u;
+      out.push({
+        x:.5*((2*p1.x)+(-p0.x+p2.x)*u+(2*p0.x-5*p1.x+4*p2.x-p3.x)*u2+(-p0.x+3*p1.x-3*p2.x+p3.x)*u3),
+        y:.5*((2*p1.y)+(-p0.y+p2.y)*u+(2*p0.y-5*p1.y+4*p2.y-p3.y)*u2+(-p0.y+3*p1.y-3*p2.y+p3.y)*u3)
+      });
+    }
+  }
+  return out;
+}
 function minZoom(t){
   const d=Math.max(0,t.depth||0);
   const rank=(t.rank||'').toUpperCase();
@@ -1399,13 +1470,14 @@ const elems=[];
 [...taxa].sort((a,b)=>(a.depth||0)-(b.depth||0)).forEach(t=>{
   if(t.id==='__life'||!t.poly||t.poly.length<3)return;
   t.box=polyBBox(t.poly);t.center=polygonCentroid(t.poly);t.area=absArea(t.poly);
+  const drawnPoly=(t.depth||0)===0?refineContour(t.poly,100):t.poly;
   if((t.depth||0)===0){
     const haloWide=document.createElementNS(NS,'path');
-    haloWide.setAttribute('d',pathFromPoly(t.poly));haloWide.setAttribute('class','continentHaloWide');haloWide.setAttribute('stroke-width','40');hg.appendChild(haloWide);
+    haloWide.setAttribute('d',pathFromPoly(drawnPoly));haloWide.setAttribute('class','continentHaloWide');haloWide.setAttribute('stroke-width','40');hg.appendChild(haloWide);
     const haloNear=document.createElementNS(NS,'path');
-    haloNear.setAttribute('d',pathFromPoly(t.poly));haloNear.setAttribute('class','continentHaloNear');haloNear.setAttribute('stroke-width','12');hg.appendChild(haloNear);
+    haloNear.setAttribute('d',pathFromPoly(drawnPoly));haloNear.setAttribute('class','continentHaloNear');haloNear.setAttribute('stroke-width','12');hg.appendChild(haloNear);
   }
-  const p=document.createElementNS(NS,'path');p.setAttribute('d',pathFromPoly(t.poly));p.setAttribute('fill',fillFor(t));p.setAttribute('fill-opacity','.98');p.setAttribute('class','taxonPath');p.setAttribute('filter','url(#landTexture)');p.setAttribute('stroke',edgeColorFor(t));p.setAttribute('stroke-opacity','.34');p.setAttribute('stroke-width','1.05');p.dataset.minz=minZoom(t);p.dataset.id=t.id;p.onclick=e=>{e.stopPropagation();focus(t)};rg.appendChild(p);
+  const p=document.createElementNS(NS,'path');p.setAttribute('d',pathFromPoly(drawnPoly));p.setAttribute('fill',fillFor(t));p.setAttribute('fill-opacity','.98');p.setAttribute('class','taxonPath');p.setAttribute('filter','url(#landTexture)');p.setAttribute('stroke',edgeColorFor(t));p.setAttribute('stroke-opacity','.34');p.setAttribute('stroke-width','1.05');p.dataset.minz=minZoom(t);p.dataset.id=t.id;p.onclick=e=>{e.stopPropagation();focus(t)};rg.appendChild(p);
   const text=document.createElementNS(NS,'text');text.setAttribute('x',t.center.x);text.setAttribute('y',t.center.y);text.setAttribute('text-anchor','middle');text.setAttribute('class','label');text.textContent=t.vernacularName||t.canonicalName;text.dataset.minz=(minZoom(t)*1.02);text.dataset.id=t.id;lg.appendChild(text);
   elems.push({t,p,text})
 });
@@ -1445,7 +1517,7 @@ function anim(){let k=.16;view.x+=(target.x-view.x)*k;view.y+=(target.y-view.y)*
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
   status.textContent=`${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v32 · eight kingdoms · five minor kingdoms allocated 0.5% each',payload.meta.worldLandFraction);
+console.log('Atlas v33 · scattered minor kingdoms · kingdom contours refined 100×',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
