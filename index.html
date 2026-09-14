@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — multiscale kustlijnen v35</title>
+<title>Atlas of Life — blijvende geometrische kustlijnen v36</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -77,7 +77,7 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 <g id="halos"></g><g id="regions"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v35 · multiscale kust · rijk–orde</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v36 · blijvende kust · rijk–orde</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1501,43 +1501,29 @@ function minZoom(t){
   return Math.max(rankZ[rank]||.88,.70+d*.31);
 }
 
-/* One composited filter per rank keeps the iPad workload bounded. Within a
-   rank every sibling receives exactly the same displacement field, so shared
-   borders stay aligned while their coastlines gain detail at every zoom. */
-const rankLayers=new Map();
-[
-  ['realm','url(#coastRealm)'],
-  ['phylum','url(#coastPhylum)'],
-  ['class','url(#coastClass)'],
-  ['order','url(#coastOrder)'],
-  ['deeper',null]
-].forEach(([name,filter])=>{
-  const layer=document.createElementNS(NS,'g');
-  layer.dataset.rankLayer=name;
-  if(filter)layer.setAttribute('filter',filter);
-  rg.appendChild(layer);rankLayers.set(name,layer);
-});
-function layerFor(t){
+/* V36 bakes the multiscale coast into each SVG path. This avoids Safari's
+   maximum filtered-layer size, which made the land disappear when zooming. */
+function contourFactorFor(t){
   const rank=(t.rank||'').toUpperCase();
-  if(rank==='DOMAIN'||rank==='KINGDOM')return rankLayers.get('realm');
-  if(rank==='PHYLUM')return rankLayers.get('phylum');
-  if(rank==='CLASS')return rankLayers.get('class');
-  if(rank==='ORDER')return rankLayers.get('order');
-  return rankLayers.get('deeper');
+  if(rank==='DOMAIN'||rank==='KINGDOM')return 100;
+  if(rank==='PHYLUM')return 28;
+  if(rank==='CLASS')return 16;
+  if(rank==='ORDER')return 10;
+  return 1;
 }
 
 const elems=[];
 [...taxa].sort((a,b)=>(a.depth||0)-(b.depth||0)).forEach(t=>{
   if(t.id==='__life'||!t.poly||t.poly.length<3)return;
   t.box=polyBBox(t.poly);t.center=polygonCentroid(t.poly);t.area=absArea(t.poly);
-  const drawnPoly=(t.depth||0)===0?refineContour(t.poly,100,t.id):t.poly;
+  const drawnPoly=refineContour(t.poly,contourFactorFor(t),t.id);
   if((t.depth||0)===0){
     const haloWide=document.createElementNS(NS,'path');
     haloWide.setAttribute('d',pathFromPoly(drawnPoly));haloWide.setAttribute('class','continentHaloWide');haloWide.setAttribute('stroke-width','40');hg.appendChild(haloWide);
     const haloNear=document.createElementNS(NS,'path');
     haloNear.setAttribute('d',pathFromPoly(drawnPoly));haloNear.setAttribute('class','continentHaloNear');haloNear.setAttribute('stroke-width','12');hg.appendChild(haloNear);
   }
-  const p=document.createElementNS(NS,'path');p.setAttribute('d',pathFromPoly(drawnPoly));p.setAttribute('fill',fillFor(t));p.setAttribute('fill-opacity','.98');p.setAttribute('class','taxonPath');p.setAttribute('filter','url(#landTexture)');p.setAttribute('stroke',edgeColorFor(t));p.setAttribute('stroke-opacity','.34');p.setAttribute('stroke-width','1.05');p.dataset.minz=minZoom(t);p.dataset.id=t.id;p.onclick=e=>{e.stopPropagation();focus(t)};layerFor(t).appendChild(p);
+  const p=document.createElementNS(NS,'path');p.setAttribute('d',pathFromPoly(drawnPoly));p.setAttribute('fill',fillFor(t));p.setAttribute('fill-opacity','.98');p.setAttribute('class','taxonPath');p.setAttribute('filter','url(#landTexture)');p.setAttribute('stroke',edgeColorFor(t));p.setAttribute('stroke-opacity','.34');p.setAttribute('stroke-width','1.05');p.dataset.minz=minZoom(t);p.dataset.id=t.id;p.onclick=e=>{e.stopPropagation();focus(t)};rg.appendChild(p);
   const text=document.createElementNS(NS,'text');text.setAttribute('x',t.center.x);text.setAttribute('y',t.center.y);text.setAttribute('text-anchor','middle');text.setAttribute('class','label');text.textContent=t.vernacularName||t.canonicalName;text.dataset.minz=(minZoom(t)*1.02);text.dataset.id=t.id;lg.appendChild(text);
   elems.push({t,p,text})
 });
@@ -1577,7 +1563,7 @@ function anim(){let k=.16;view.x+=(target.x-view.x)*k;view.y+=(target.y-view.y)*
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
   status.textContent=`${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v35 · five-octave procedural coast detail · kingdom through order',payload.meta.worldLandFraction);
+console.log('Atlas v36 · persistent geometric coast detail · kingdom through order',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
