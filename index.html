@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — blijvende geometrische kustlijnen v40</title>
+<title>Atlas of Life — blijvende geometrische kustlijnen v41</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -13,6 +13,10 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 .grid{fill:none;stroke:#d7f4fb;stroke-width:2;opacity:.10;vector-effect:non-scaling-stroke}
 .taxonPath{cursor:pointer;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke;transition:opacity .18s,filter .12s;filter:drop-shadow(0 1px 1px #052b3a14)}
 .taxonPath:hover{filter:brightness(1.045)}
+/* v41: lightweight rendering while the user is actively navigating. */
+svg.fastInteraction .taxonPath{filter:none!important}
+svg.fastInteraction .label{display:none!important}
+svg.fastInteraction .latin{display:none!important}
 .continentHaloWide,.continentHaloNear{display:none}
 .label{font-weight:760;fill:#18372f;pointer-events:none;paint-order:stroke;stroke:#fffdf8e8;stroke-width:2.4px;stroke-linejoin:round}
 .hidden{opacity:0;pointer-events:none}
@@ -77,7 +81,7 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 <g id="halos"></g><g id="regions"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v40 · snelle zoekzoom · rijk–orde</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v41 · snelle handzoom · rijk–orde</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1665,18 +1669,137 @@ function semantic(z,force=false){
     levelEl.textContent=names[Math.min(names.length-1,Math.max(0,deepest))]||'wereld'
   }
 }
-svg.addEventListener('wheel',e=>{e.preventDefault();let r=svg.getBoundingClientRect(),px=(e.clientX-r.left)/r.width,py=(e.clientY-r.top)/r.height,wx=target.x+px*target.w,wy=target.y+py*target.h,f=Math.exp(e.deltaY*.0012);target.w=Math.max(24,Math.min(3000,target.w*f));target.h=Math.max(15,Math.min(1900,target.h*f));target.x=wx-px*target.w;target.y=wy-py*target.h},{passive:false});
-svg.onpointerdown=e=>{svg.setPointerCapture?.(e.pointerId);ptr.set(e.pointerId,{x:e.clientX,y:e.clientY});if(ptr.size===1){drag=true;last={x:e.clientX,y:e.clientY}}if(ptr.size===2){let p=[...ptr.values()];pinch={d:Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y),v:{...target},cx:(p[0].x+p[1].x)/2,cy:(p[0].y+p[1].y)/2};drag=false}};
-svg.onpointermove=e=>{if(!ptr.has(e.pointerId))return;ptr.set(e.pointerId,{x:e.clientX,y:e.clientY});if(ptr.size===2&&pinch){let p=[...ptr.values()],d=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y),sc=pinch.d/d,r=svg.getBoundingClientRect(),px=(pinch.cx-r.left)/r.width,py=(pinch.cy-r.top)/r.height,wx=pinch.v.x+px*pinch.v.w,wy=pinch.v.y+py*pinch.v.h;target.w=Math.max(24,Math.min(3000,pinch.v.w*sc));target.h=Math.max(15,Math.min(1900,pinch.v.h*sc));target.x=wx-px*target.w;target.y=wy-py*target.h}else if(drag){let dx=e.clientX-last.x,dy=e.clientY-last.y;target.x-=dx/innerWidth*target.w;target.y-=dy/innerHeight*target.h;last={x:e.clientX,y:e.clientY}}};
-function end(e){ptr.delete(e.pointerId);if(ptr.size<2)pinch=null;if(!ptr.size){drag=false;last=null;semantic(2400/view.w,true)}}svg.onpointerup=end;svg.onpointercancel=end;
-function anim(){let k=.16;view.x+=(target.x-view.x)*k;view.y+=(target.y-view.y)*k;view.w+=(target.w-view.w)*k;view.h+=(target.h-view.h)*k;svg.setAttribute('viewBox',`${view.x} ${view.y} ${view.w} ${view.h}`);let z=2400/view.w;zoomEl.textContent=z.toFixed(2)+'×';semantic(z);requestAnimationFrame(anim)}
+
+/* v41 manual-navigation fast path */
+let interactionActive=false,interactionTimer=null,lastFastCull=0;
+
+function beginInteraction(){
+  interactionActive=true;
+  svg.classList.add('fastInteraction');
+  if(interactionTimer){clearTimeout(interactionTimer);interactionTimer=null}
+}
+function finishInteractionSoon(delay=85){
+  if(interactionTimer)clearTimeout(interactionTimer);
+  interactionTimer=setTimeout(()=>{
+    interactionActive=false;
+    svg.classList.remove('fastInteraction');
+    lastSemantic=-1;
+    semantic(2400/view.w,true);
+  },delay);
+}
+function directTargetToView(){
+  view.x=target.x;view.y=target.y;view.w=target.w;view.h=target.h;
+}
+
+svg.addEventListener('wheel',e=>{
+  e.preventDefault();
+  beginInteraction();
+
+  const r=svg.getBoundingClientRect();
+  const px=(e.clientX-r.left)/r.width,py=(e.clientY-r.top)/r.height;
+  const wx=target.x+px*target.w,wy=target.y+py*target.h;
+  const f=Math.exp(e.deltaY*.0012);
+
+  target.w=Math.max(24,Math.min(3000,target.w*f));
+  target.h=Math.max(15,Math.min(1900,target.h*f));
+  target.x=wx-px*target.w;target.y=wy-py*target.h;
+
+  directTargetToView();
+  finishInteractionSoon(95);
+},{passive:false});
+
+svg.onpointerdown=e=>{
+  svg.setPointerCapture?.(e.pointerId);
+  ptr.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  beginInteraction();
+
+  if(ptr.size===1){
+    drag=true;
+    last={x:e.clientX,y:e.clientY}
+  }
+  if(ptr.size===2){
+    const p=[...ptr.values()];
+    pinch={
+      d:Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y),
+      v:{...target},
+      cx:(p[0].x+p[1].x)/2,
+      cy:(p[0].y+p[1].y)/2
+    };
+    drag=false
+  }
+};
+
+svg.onpointermove=e=>{
+  if(!ptr.has(e.pointerId))return;
+  ptr.set(e.pointerId,{x:e.clientX,y:e.clientY});
+
+  if(ptr.size===2&&pinch){
+    const p=[...ptr.values()];
+    const d=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y);
+    const sc=pinch.d/d,r=svg.getBoundingClientRect();
+    const px=(pinch.cx-r.left)/r.width,py=(pinch.cy-r.top)/r.height;
+    const wx=pinch.v.x+px*pinch.v.w,wy=pinch.v.y+py*pinch.v.h;
+
+    target.w=Math.max(24,Math.min(3000,pinch.v.w*sc));
+    target.h=Math.max(15,Math.min(1900,pinch.v.h*sc));
+    target.x=wx-px*target.w;
+    target.y=wy-py*target.h;
+    directTargetToView();
+
+  }else if(drag){
+    const dx=e.clientX-last.x,dy=e.clientY-last.y;
+    target.x-=dx/innerWidth*target.w;
+    target.y-=dy/innerHeight*target.h;
+    last={x:e.clientX,y:e.clientY};
+    directTargetToView();
+  }
+};
+
+function end(e){
+  ptr.delete(e.pointerId);
+  if(ptr.size<2)pinch=null;
+  if(!ptr.size){
+    drag=false;
+    last=null;
+    finishInteractionSoon(70);
+  }
+}
+svg.onpointerup=end;
+svg.onpointercancel=end;
+
+/* Click/focus still uses the smooth animation.
+   Manual pinch/pan is direct and lightweight. */
+function anim(ts){
+  if(interactionActive){
+    directTargetToView();
+
+    /* Viewport culling only about 10x/sec during the gesture. */
+    if(!lastFastCull||ts-lastFastCull>95){
+      semantic(2400/view.w,true);
+      lastFastCull=ts;
+    }
+  }else{
+    const k=.16;
+    view.x+=(target.x-view.x)*k;
+    view.y+=(target.y-view.y)*k;
+    view.w+=(target.w-view.w)*k;
+    view.h+=(target.h-view.h)*k;
+  }
+
+  svg.setAttribute('viewBox',`${view.x} ${view.y} ${view.w} ${view.h}`);
+  const z=2400/view.w;
+  zoomEl.textContent=z.toFixed(2)+'×';
+
+  if(!interactionActive)semantic(z);
+  requestAnimationFrame(anim)
+}
 {
   const landPct=Math.max(0,Math.min(100,100*(payload.meta.worldLandFraction||0)));
   const openPct=100-landPct;
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
-  status.textContent=`v40 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
+  status.textContent=`v41 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v40 · fast search focus · kingdom through order',payload.meta.worldLandFraction);
+console.log('Atlas v41 · fast manual zoom + lightweight interaction · kingdom through order',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
