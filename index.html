@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — vloeiende taxonomische kleurtrappen v30</title>
+<title>Atlas of Life — acht gewogen rijken v31</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -59,7 +59,7 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 <g id="halos"></g><g id="regions"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v30 · vloeiende kleurniveaus · orden 50%</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v31 · 8 rijken · kleine rijken elk 1%</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -81,6 +81,23 @@ const taxa=payload.taxa;
 const byId=new Map(taxa.map(t=>[String(t.id),t]));
 
 let roots=taxa.filter(t=>!t.parentId||!byId.has(String(t.parentId)));
+
+/* The observation export can omit kingdoms with no mapped records. Keep all
+   eight iNaturalist kingdoms visible; absent ones become labelled empty
+   islands and receive the same fixed 1% allocation as the other small realms. */
+const requiredKingdoms=['Animalia','Plantae','Fungi','Bacteria','Archaea','Chromista','Protozoa','Viruses'];
+const sourceLife=roots.length===1&&String(roots[0].canonicalName||'').toLowerCase()==='life'
+  ? roots[0]
+  : null;
+for(const name of requiredKingdoms){
+  const present=taxa.some(t=>['KINGDOM','DOMAIN'].includes((t.rank||'').toUpperCase())&&t.canonicalName===name);
+  if(!present){
+    const kingdom={id:'__kingdom_'+name.toLowerCase(),parentId:sourceLife?.id||null,
+      canonicalName:name,rank:'KINGDOM',mapWeight:.0001,weight:.0001,depth:0};
+    taxa.push(kingdom);byId.set(String(kingdom.id),kingdom);
+  }
+}
+roots=taxa.filter(t=>!t.parentId||!byId.has(String(t.parentId)));
 if(roots.length>1){
   const life={id:'__life',parentId:null,canonicalName:'Life',rank:'ROOT',
     mapWeight:roots.reduce((a,t)=>a+Math.max(.0001,+t.mapWeight||+t.weight||1),0),depth:-1};
@@ -99,7 +116,11 @@ const levelPalettes={
   Animalia:['#78182b','#94202e','#ae2b30','#c83b2f','#df522d','#ee722d','#f39a38'],
   Plantae:['#075d3b','#08753d','#188a3b','#3ca03a','#68b536','#9cc936','#d5d944'],
   Fungi:['#3f205d','#522675','#652d8c','#7937a3','#9044b8','#aa57ca','#c875dc'],
-  Bacteria:['#725126','#8d6429','#a9782c','#c18c30','#d79f35','#e6b54a','#f0cb69']
+  Bacteria:['#65431f','#7b5225','#93632c','#ac7735','#c38d42','#d8a65a','#e8c07a'],
+  Archaea:['#101010','#202020','#303030','#424242','#555555','#6a6a6a','#808080'],
+  Chromista:['#8f285f','#a93574','#c14389','#d7559f','#e66db2','#ef8bc4','#f5add6'],
+  Protozoa:['#006c70','#007f82','#009396','#16a8aa','#3bbabd','#69ccce','#98dddd'],
+  Viruses:['#d8d8d4','#dfdfdc','#e6e6e3','#ececea','#f2f2f0','#f8f8f6','#ffffff']
 };
 const rankFallback={DOMAIN:'#89abc0',KINGDOM:'#8fb9d4',PHYLUM:'#98c4ad',CLASS:'#acd19e',ORDER:'#cbd993',FAMILY:'#bdd7ad',GENUS:'#d0dfbd',SPECIES:'#e1ead8',ROOT:'#eef3eb'};
 
@@ -754,7 +775,7 @@ function computeRecursiveCoverage(){
       t.childLandFraction=null;
       continue;
     }
-    const parentArea=Math.max(1,absArea(t.poly));
+    const parentArea=Math.max(1e-9,absArea(t.poly));
     const childArea=cs.reduce((s,c)=>s+absArea(c.poly),0);
     t.childLandFraction=Math.max(0,Math.min(1,childArea/parentArea));
     if(t.childLandFraction<worst){
@@ -815,7 +836,11 @@ computeRecursiveCoverage();
   }
   for(const t of taxa)computeAnchorWeight(t);
 
+  const rootSpaceWeight=new Map();
+
   function layoutWeight(t){
+    const fixedRoot=rootSpaceWeight.get(String(t.id));
+    if(fixedRoot!==undefined)return fixedRoot;
     /* Everything above ORDER is determined by descendant orders. */
     return rankLevel(t)<=4
       ? Math.max(.0001,anchorWeight.get(String(t.id))||weight(t))
@@ -941,6 +966,17 @@ computeRecursiveCoverage();
       if(name==='bacteria')return .72
         +.12*Math.sin(4*a+.8)+.07*Math.cos(7*a-.4)
         -.12*anglePulse(a,.55,.15);
+      if(name==='archaea')return .68
+        +.15*Math.cos(3*a-.25)+.09*Math.sin(6*a+.4)
+        -.12*anglePulse(a,-1.35,.16);
+      if(name==='chromista')return .70
+        +.17*Math.sin(3*a+.9)+.08*Math.cos(5*a-.3)
+        -.13*anglePulse(a,2.25,.15);
+      if(name==='protozoa')return .69
+        +.14*Math.cos(4*a+.35)+.10*Math.sin(7*a-.6)
+        -.12*anglePulse(a,.85,.14);
+      if(name==='viruses')return .67
+        +.18*Math.cos(5*a-.55)+.08*Math.sin(8*a+.2);
       return .72+.11*Math.sin(3*a+6.28*h2(t.id,16900))
         +.07*Math.sin(5*a+6.28*h2(t.id,16901));
     }
@@ -1146,48 +1182,34 @@ computeRecursiveCoverage();
   }
 
   /* ---------- top-level world allocation ----------
-     Four non-overlapping cells; all areas come from order-derived weights.
-     Root shapes occupy 85% of those cells, giving real ocean between realms. */
+     Animalia, Plantae and Fungi share 95% according to their established
+     ORDER-derived weights. The five observation-poor realms each receive a
+     fixed 1% allocation, so all eight remain findable without dominating. */
   const top=(children.get(String(roots[0].id))||[])
     .filter(t=>t&&t.id!=='__life');
-
-  const byName=new Map(top.map(t=>[t.canonicalName,t]));
-  const plant=byName.get('Plantae');
-  const animal=byName.get('Animalia');
-  const fungi=byName.get('Fungi');
-  const bacteria=byName.get('Bacteria');
 
   const worldPoly=[
     {x:4,y:4},{x:2396,y:4},{x:2396,y:1496},{x:4,y:1496}
   ];
 
-  /* If the familiar four groups exist, keep the readable 2x2 geography,
-     but calculate every split from aggregate ORDER weight. */
   const rootCells=new Map();
+  const majorNames=new Set(['Animalia','Plantae','Fungi']);
+  const minorNames=new Set(['Bacteria','Archaea','Chromista','Protozoa','Viruses']);
+  const major=top.filter(t=>majorNames.has(t.canonicalName));
+  const majorRaw=major.reduce((s,t)=>s+Math.max(.0001,anchorWeight.get(String(t.id))||weight(t)),0);
 
-  if(plant&&animal&&fungi&&bacteria){
-    const left=[plant,fungi],right=[animal,bacteria];
-    const wLeft=left.reduce((s,t)=>s+layoutWeight(t),0);
-    const wRight=right.reduce((s,t)=>s+layoutWeight(t),0);
-    const xCut=cutForArea(worldPoly,'x',wLeft/(wLeft+wRight));
+  for(const t of top){
+    if(minorNames.has(t.canonicalName))rootSpaceWeight.set(String(t.id),1);
+    else if(majorNames.has(t.canonicalName)){
+      const raw=Math.max(.0001,anchorWeight.get(String(t.id))||weight(t));
+      rootSpaceWeight.set(String(t.id),95*raw/majorRaw);
+    }
+  }
+  partitionCells(worldPoly,top,'WORLD-V31',0,rootCells);
 
-    const leftPoly=clipAxis(worldPoly,'x',xCut,true);
-    const rightPoly=clipAxis(worldPoly,'x',xCut,false);
-
-    const lp=layoutWeight(plant),lf=layoutWeight(fungi);
-    const ra=layoutWeight(animal),rb=layoutWeight(bacteria);
-
-    const yLeft=cutForArea(leftPoly,'y',lp/(lp+lf));
-    const yRight=cutForArea(rightPoly,'y',ra/(ra+rb));
-
-    rootCells.set(String(plant.id),clipAxis(leftPoly,'y',yLeft,true));
-    rootCells.set(String(fungi.id),clipAxis(leftPoly,'y',yLeft,false));
-    rootCells.set(String(animal.id),clipAxis(rightPoly,'y',yRight,true));
-    rootCells.set(String(bacteria.id),clipAxis(rightPoly,'y',yRight,false));
-
-    /* Any unexpected extra root gets a tiny fallback cell later. */
-  }else{
-    partitionCells(worldPoly,top,'WORLD',0,rootCells);
+  for(const t of top){
+    const cell=rootCells.get(String(t.id));
+    t.worldAllocationFraction=cell?absArea(cell)/absArea(worldPoly):0;
   }
 
   /* Reset all geometry from the earlier engine. */
@@ -1423,7 +1445,7 @@ function anim(){let k=.16;view.x+=(target.x-view.x)*k;view.y+=(target.y-view.y)*
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
   status.textContent=`${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v30 · smoothly blended taxonomic level palettes · kingdoms/phyla/classes 70% land · orders 50% land',payload.meta.worldLandFraction);
+console.log('Atlas v31 · eight kingdoms · five minor kingdoms allocated 1% each',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
