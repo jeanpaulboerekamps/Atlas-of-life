@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import json
+import os
+import shutil
 import time
 import unicodedata
 import urllib.parse
 import urllib.request
-import shutil
-from pathlib import Path
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -17,9 +20,7 @@ CFG = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
 API = CFG["taxonomy"]["apiBase"].rstrip("/")
 DATASET = CFG["taxonomy"]["datasetKey"]
 
-HEADERS = {
-    "User-Agent": "AtlasOfLife/0.42.1 taxonomic detail generator"
-}
+HEADERS = {"User-Agent": "AtlasOfLife/0.42.2 parallel detail generator"}
 
 REJECTED = {
     "SYNONYM", "HETEROTYPIC_SYNONYM", "HOMOTYPIC_SYNONYM",
@@ -28,9 +29,12 @@ REJECTED = {
 
 PAGE_SIZE = 1000
 DEEP_PAGE_LIMIT = 95000
+AUDIT_WORKERS = int(os.environ.get("DETAIL_AUDIT_WORKERS", "16"))
+ORDER_WORKERS = int(os.environ.get("DETAIL_ORDER_WORKERS", "4"))
+FAMILY_WORKERS = int(os.environ.get("DETAIL_FAMILY_WORKERS", "6"))
 
 
-def get_json(url: str, retries: int = 5):
+def get_json(url: str, retries: int = 6):
     last = None
     for attempt in range(retries):
         try:
@@ -41,19 +45,19 @@ def get_json(url: str, retries: int = 5):
             last = exc
             if attempt + 1 == retries:
                 raise
-            time.sleep(1.5 * (attempt + 1))
+            time.sleep(min(20, 1.4 * (2 ** attempt)))
     raise last
 
 
 def safe_id(value) -> str:
-    s = str(value)
-    return "".join(c if c.isalnum() or c in "._-" else "_" for c in s)
+    return "".join(
+        c if c.isalnum() or c in "._-" else "_" for c in str(value)
+    )
 
 
 def norm_name(value: str | None) -> str:
     s = unicodedata.normalize("NFD", str(value or "")).lower()
-    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
-    return s.strip()
+    return "".join(c for c in s if unicodedata.category(c) != "Mn").strip()
 
 
 def search_prefix(value: str | None) -> str:
@@ -104,7 +108,6 @@ def clean_result(x, rank=None):
 
 
 def search_url(higher_key, rank, limit, offset=0, status="ACCEPTED"):
-    # GBIF accepts the camelCase search parameters documented by the Species API.
     params = {
         "datasetKey": DATASET,
         "higherTaxonKey": higher_key,
@@ -118,8 +121,8 @@ def search_url(higher_key, rank, limit, offset=0, status="ACCEPTED"):
 
 
 def search_count(higher_key, rank):
-    # Prefer accepted taxa. If a checklist behaves differently for status filtering,
-    # retry without the status parameter and filter locally.
+    # First try accepted usages; fallback to unfiltered if this checklist does
+    # not expose accepted counts in the expected way.
     for status in ("ACCEPTED", None):
         page = get_json(search_url(higher_key, rank, 0, 0, status))
         count = int(page.get("count") or 0)
@@ -128,33 +131,26 @@ def search_count(higher_key, rank):
     return 0, "ACCEPTED"
 
 
-def search_all(higher_key, rank, max_records=DEEP_PAGE_LIMIT):
+def search_all(higher_key, rank, expected_count=None, max_records=DEEP_PAGE_LIMIT):
     count, status = search_count(higher_key, rank)
+    if expected_count is not None and expected_count > count:
+        count = expected_count
     if count == 0:
         return [], 0
-
     if count > max_records:
-        raise OverflowError(
-            f"{rank} under {higher_key}: {count} records exceeds safe deep-page limit"
-        )
+        raise OverflowError(f"{rank} under {higher_key}: {count} > safe page limit")
 
-    rows = []
-    offset = 0
+    rows, offset = [], 0
     while offset < count:
-        page = get_json(
-            search_url(higher_key, rank, PAGE_SIZE, offset, status)
-        )
+        page = get_json(search_url(higher_key, rank, PAGE_SIZE, offset, status))
         batch = page.get("results") or []
         if not batch:
             break
-        for x in batch:
-            if accepted(x):
-                rows.append(x)
+        rows.extend(x for x in batch if accepted(x))
         offset += len(batch)
         if page.get("endOfRecords"):
             break
 
-    # De-duplicate by checklist usage key.
     out = {}
     for x in rows:
         k = key_of(x)
@@ -164,13 +160,9 @@ def search_all(higher_key, rank, max_records=DEEP_PAGE_LIMIT):
 
 
 def classification_key(x, rank):
-    # Search responses normally expose familyKey/genusKey.  The fallbacks
-    # make this work with variants that use string keys or classification arrays.
-    field = rank.lower() + "Key"
-    value = x.get(field)
+    value = x.get(rank.lower() + "Key")
     if value is not None:
         return str(value)
-
     cls = x.get("classification")
     if isinstance(cls, list):
         for item in cls:
@@ -193,43 +185,181 @@ def classification_name(x, rank):
     return None
 
 
-def synthetic_family(order_id, name="Overige families"):
+def synthetic_family(order_id):
     fid = f"__other_family_{safe_id(order_id)}"
     return fid, {
-        "id": fid,
-        "parentId": str(order_id),
-        "canonicalName": name,
-        "scientificName": name,
-        "rank": "FAMILY",
-        "status": "ACCEPTED",
-        "synthetic": True,
+        "id": fid, "parentId": str(order_id),
+        "canonicalName": "Overige families",
+        "scientificName": "Overige families",
+        "rank": "FAMILY", "status": "ACCEPTED", "synthetic": True,
     }
 
 
-def synthetic_genus(family_id, name="Overige soorten"):
+def synthetic_genus(family_id):
     gid = f"__other_genus_{safe_id(family_id)}"
     return gid, {
-        "id": gid,
-        "parentId": str(family_id),
-        "canonicalName": name,
-        "scientificName": name,
-        "rank": "GENUS",
-        "status": "ACCEPTED",
-        "synthetic": True,
+        "id": gid, "parentId": str(family_id),
+        "canonicalName": "Overige soorten",
+        "scientificName": "Overige soorten",
+        "rank": "GENUS", "status": "ACCEPTED", "synthetic": True,
     }
 
 
-def fetch_order(order):
+def load_base():
+    taxa_path = ROOT / "data" / "taxa.json"
+    payload = json.loads(taxa_path.read_text(encoding="utf-8"))
+    orders = [
+        t for t in payload.get("taxa", [])
+        if str(t.get("rank", "")).upper() == "ORDER"
+    ]
+    if not orders:
+        raise RuntimeError("No ORDER taxa found in data/taxa.json")
+    return taxa_path, payload, orders
+
+
+# -------------------------------------------------------------------
+# PHASE 1 — FAST AUDIT
+# -------------------------------------------------------------------
+
+def audit_one(order):
+    oid = str(order["id"])
+    key = order.get("key", oid)
+    name = order.get("canonicalName") or order.get("scientificName") or oid
+
+    families, _ = search_count(key, "FAMILY")
+    genera, _ = search_count(key, "GENUS")
+    species, _ = search_count(key, "SPECIES")
+
+    return oid, {
+        "name": name,
+        "key": key,
+        "families": families,
+        "genera": genera,
+        "species": species,
+    }
+
+
+def audit():
+    taxa_path, payload, orders = load_base()
+    print(f"AUDIT: {len(orders)} orders with {AUDIT_WORKERS} parallel workers")
+
+    results = {}
+    started = time.time()
+
+    with ThreadPoolExecutor(max_workers=AUDIT_WORKERS) as ex:
+        futures = {ex.submit(audit_one, o): o for o in orders}
+        completed = 0
+        for fut in as_completed(futures):
+            order = futures[fut]
+            oid, rec = fut.result()
+            results[oid] = rec
+            completed += 1
+            if completed % 25 == 0 or completed == len(orders):
+                elapsed = time.time() - started
+                print(
+                    f"AUDIT {completed}/{len(orders)} · "
+                    f"{elapsed:.0f}s · latest {rec['name']}: "
+                    f"{rec['families']} F / {rec['genera']} G / {rec['species']} S"
+                )
+
+    by_name = {norm_name(v["name"]): v for v in results.values()}
+    probes = ["Lepidoptera", "Trichoptera", "Coleoptera", "Passeriformes"]
+    probe_records = [by_name.get(norm_name(n)) for n in probes]
+    probe_records = [x for x in probe_records if x]
+
+    if not probe_records:
+        raise RuntimeError("AUDIT FAILED: none of the known validation orders were found")
+
+    bad_probes = [
+        x for x in probe_records
+        if x["families"] <= 0 or x["genera"] <= 0 or x["species"] <= 0
+    ]
+    if bad_probes:
+        raise RuntimeError(f"AUDIT FAILED known orders: {bad_probes}")
+
+    nonzero_species = sum(1 for x in results.values() if x["species"] > 0)
+    total_species = sum(x["species"] for x in results.values())
+    total_families = sum(x["families"] for x in results.values())
+    total_genera = sum(x["genera"] for x in results.values())
+
+    suspicious = [
+        x for x in results.values()
+        if (x["genera"] > 0 and x["species"] == 0)
+        or (x["families"] > 0 and x["genera"] == 0 and x["species"] > 0)
+    ]
+
+    if nonzero_species < 100 or total_species < 100000:
+        raise RuntimeError(
+            f"AUDIT FAILED implausible totals: {nonzero_species} nonempty orders, "
+            f"{total_species} species"
+        )
+
+    report = {
+        "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "method": "parallel GBIF Species Search count audit",
+        "workers": AUDIT_WORKERS,
+        "summary": {
+            "orders": len(orders),
+            "ordersWithSpecies": nonzero_species,
+            "families": total_families,
+            "genera": total_genera,
+            "species": total_species,
+            "suspiciousOrders": len(suspicious),
+        },
+        "knownOrderChecks": probe_records,
+        "suspicious": sorted(
+            suspicious,
+            key=lambda x: (-x["genera"], x["name"])
+        )[:250],
+        "orders": results,
+    }
+
+    out = ROOT / "data" / "detail_audit.json"
+    out.write_text(
+        json.dumps(report, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8",
+    )
+
+    print("AUDIT OK")
+    print(json.dumps(report["summary"], ensure_ascii=False))
+    for rec in probe_records:
+        print(
+            f"CHECK {rec['name']}: "
+            f"{rec['families']} families, {rec['genera']} genera, "
+            f"{rec['species']} species"
+        )
+    if suspicious:
+        print(
+            f"NOTE: {len(suspicious)} orders have an unusual zero-rank pattern. "
+            "They are recorded in data/detail_audit.json; generation continues "
+            "only for orders whose audited species count is > 0."
+        )
+
+
+# -------------------------------------------------------------------
+# PHASE 2 — PARALLEL DETAIL GENERATION
+# -------------------------------------------------------------------
+
+def fetch_species_for_family(family):
+    return search_all(
+        family.get("key", family["id"]),
+        "SPECIES",
+        expected_count=None,
+    )[0]
+
+
+def fetch_order(order, audit_rec):
     order_id = str(order["id"])
     higher_key = order.get("key", order_id)
 
-    family_raw, family_count = search_all(higher_key, "FAMILY")
-    genus_raw, genus_count = search_all(higher_key, "GENUS")
-    species_count, _ = search_count(higher_key, "SPECIES")
+    family_raw, _ = search_all(
+        higher_key, "FAMILY", expected_count=audit_rec["families"]
+    )
+    genus_raw, _ = search_all(
+        higher_key, "GENUS", expected_count=audit_rec["genera"]
+    )
 
-    families = {}
-    family_name_to_id = {}
-
+    families, family_name_to_id = {}, {}
     for x in family_raw:
         r = clean_result(x, "FAMILY")
         if not r:
@@ -238,9 +368,7 @@ def fetch_order(order):
         families[r["id"]] = r
         family_name_to_id[norm_name(r["canonicalName"])] = r["id"]
 
-    genera = {}
-    genus_name_to_id = {}
-
+    genera, genus_name_to_id = {}, {}
     for x in genus_raw:
         r = clean_result(x, "GENUS")
         if not r:
@@ -250,7 +378,6 @@ def fetch_order(order):
         if not fid or fid not in families:
             fname = classification_name(x, "FAMILY")
             fid = family_name_to_id.get(norm_name(fname)) if fname else None
-
         if not fid:
             fid, f = synthetic_family(order_id)
             families.setdefault(fid, f)
@@ -259,37 +386,54 @@ def fetch_order(order):
         genera[r["id"]] = r
         genus_name_to_id[norm_name(r["canonicalName"])] = r["id"]
 
-    # For most orders, fetch species in one search.  Large orders (e.g. Coleoptera,
-    # Lepidoptera) are split by family so the GBIF 100k deep-page boundary is
-    # never crossed.
-    species_rows = []
+    audited_species = int(audit_rec["species"])
+    if audited_species <= 0:
+        return {
+            "families": families,
+            "genera": genera,
+            "species": {},
+            "audit": audit_rec,
+        }
 
-    if species_count <= DEEP_PAGE_LIMIT:
-        species_rows, _ = search_all(higher_key, "SPECIES")
+    if audited_species <= DEEP_PAGE_LIMIT:
+        species_rows, _ = search_all(
+            higher_key, "SPECIES", expected_count=audited_species
+        )
     else:
         print(
-            f"  large order: {species_count} species; splitting species fetch by family"
+            f"  {audit_rec['name']}: {audited_species} species; "
+            f"parallel split across {len(families)} families"
         )
-        for fi, family in enumerate(list(families.values()), start=1):
-            if family.get("synthetic"):
-                continue
+        species_rows = []
+        real_families = [f for f in families.values() if not f.get("synthetic")]
+
+        def family_job(f):
             try:
-                rows, cnt = search_all(family.get("key", family["id"]), "SPECIES")
-                species_rows.extend(rows)
+                return fetch_species_for_family(f)
             except OverflowError:
-                # Extremely large family: split by genus.
                 family_genera = [
                     g for g in genera.values()
-                    if str(g.get("parentId")) == str(family["id"])
+                    if str(g.get("parentId")) == str(f["id"])
                 ]
+                rows = []
                 for g in family_genera:
-                    rows, _ = search_all(g.get("key", g["id"]), "SPECIES")
-                    species_rows.extend(rows)
+                    rows.extend(
+                        search_all(g.get("key", g["id"]), "SPECIES")[0]
+                    )
+                return rows
 
-            if fi % 25 == 0:
-                print(f"    families {fi}/{len(families)}")
+        with ThreadPoolExecutor(max_workers=FAMILY_WORKERS) as ex:
+            futures = {ex.submit(family_job, f): f for f in real_families}
+            completed = 0
+            for fut in as_completed(futures):
+                species_rows.extend(fut.result())
+                completed += 1
+                if completed % 25 == 0:
+                    print(
+                        f"    {audit_rec['name']} families "
+                        f"{completed}/{len(real_families)}"
+                    )
 
-    # De-duplicate species across split queries.
     dedup = {}
     for x in species_rows:
         k = key_of(x)
@@ -298,7 +442,6 @@ def fetch_order(order):
     species_rows = list(dedup.values())
 
     species = {}
-
     for x in species_rows:
         r = clean_result(x, "SPECIES")
         if not r:
@@ -308,7 +451,6 @@ def fetch_order(order):
         if not fid or fid not in families:
             fname = classification_name(x, "FAMILY")
             fid = family_name_to_id.get(norm_name(fname)) if fname else None
-
         if not fid:
             fid, f = synthetic_family(order_id)
             families.setdefault(fid, f)
@@ -317,15 +459,11 @@ def fetch_order(order):
         if not gid or gid not in genera:
             gname = classification_name(x, "GENUS")
             gid = genus_name_to_id.get(norm_name(gname)) if gname else None
-
         if not gid:
             gid, g = synthetic_genus(fid)
             genera.setdefault(gid, g)
 
-        # If the genus existed but was attached to another/unknown family,
-        # the species classification wins.
         genera[gid]["parentId"] = fid
-
         r["parentId"] = gid
         r["speciesCount"] = 1
         r["weight"] = 1
@@ -334,7 +472,6 @@ def fetch_order(order):
 
     genus_counts = defaultdict(int)
     family_counts = defaultdict(int)
-
     for s in species.values():
         gid = str(s["parentId"])
         genus_counts[gid] += 1
@@ -344,7 +481,6 @@ def fetch_order(order):
 
     for gid, g in genera.items():
         g["speciesCount"] = genus_counts.get(gid, 0)
-        # Keep empty accepted genera visible but minimal.
         g["weight"] = max(1, g["speciesCount"])
         g["mapWeight"] = g["weight"]
 
@@ -357,23 +493,27 @@ def fetch_order(order):
         "families": families,
         "genera": genera,
         "species": species,
-        "apiCounts": {
-            "families": family_count,
-            "genera": genus_count,
-            "species": species_count,
-        },
+        "audit": audit_rec,
     }
 
 
-def write_order(staging, order, result, search_shards):
+def append_search_part(parts_dir, row):
+    prefix = search_prefix(row.get("n"))
+    with (parts_dir / f"{prefix}.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def write_order(staging, order, result):
     order_id = str(order["id"])
     order_name = order.get("canonicalName") or order.get("scientificName") or order_id
     families = result["families"]
     genera = result["genera"]
     species = result["species"]
+    audit_rec = result["audit"]
 
     orders_dir = staging / "orders"
     families_dir = staging / "families"
+    parts_dir = staging / "_search_parts"
 
     order_payload = {
         "meta": {
@@ -382,12 +522,11 @@ def write_order(staging, order, result, search_shards):
             "families": len(families),
             "genera": len(genera),
             "species": len(species),
-            "apiCounts": result["apiCounts"],
+            "audited": audit_rec,
             "weightRule": "family/genus = descendant species count",
         },
         "taxa": list(families.values()) + list(genera.values()),
     }
-
     (orders_dir / f"{safe_id(order_id)}.json").write_text(
         json.dumps(order_payload, ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8",
@@ -401,17 +540,16 @@ def write_order(staging, order, result, search_shards):
             by_family_species[str(g["parentId"])].append(s)
 
     for fid, sp in by_family_species.items():
-        family_payload = {
-            "meta": {
-                "familyId": fid,
-                "orderId": order_id,
-                "species": len(sp),
-                "weightRule": "every species = fixed weight 1",
-            },
-            "taxa": sp,
-        }
         (families_dir / f"{safe_id(fid)}.json").write_text(
-            json.dumps(family_payload, ensure_ascii=False, separators=(",", ":")),
+            json.dumps({
+                "meta": {
+                    "familyId": fid,
+                    "orderId": order_id,
+                    "species": len(sp),
+                    "weightRule": "every species = fixed weight 1",
+                },
+                "taxa": sp,
+            }, ensure_ascii=False, separators=(",", ":")),
             encoding="utf-8",
         )
 
@@ -421,7 +559,7 @@ def write_order(staging, order, result, search_shards):
         n = norm_name(t.get("canonicalName"))
         if not n:
             continue
-        search_shards[search_prefix(n)].append({
+        append_search_part(parts_dir, {
             "n": n,
             "id": str(t["id"]),
             "o": order_id,
@@ -437,12 +575,11 @@ def write_order(staging, order, result, search_shards):
         g = genera.get(gid)
         if not g:
             continue
-        fid = str(g["parentId"])
-        search_shards[search_prefix(n)].append({
+        append_search_part(parts_dir, {
             "n": n,
             "id": str(s["id"]),
             "o": order_id,
-            "f": fid,
+            "f": str(g["parentId"]),
             "g": gid,
             "r": "SPECIES",
         })
@@ -453,124 +590,123 @@ def write_order(staging, order, result, search_shards):
     order["detailAvailable"] = True
 
 
-def main():
-    taxa_path = ROOT / "data" / "taxa.json"
-    payload = json.loads(taxa_path.read_text(encoding="utf-8"))
-    base_taxa = payload.get("taxa", [])
+def finalise_search(staging):
+    parts = staging / "_search_parts"
+    search = staging / "search"
+    search.mkdir(parents=True, exist_ok=True)
 
-    orders = [
-        t for t in base_taxa
-        if str(t.get("rank", "")).upper() == "ORDER"
+    for p in parts.glob("*.jsonl"):
+        rows = []
+        with p.open(encoding="utf-8") as fh:
+            for line in fh:
+                if line.strip():
+                    rows.append(json.loads(line))
+        rows.sort(key=lambda x: x["n"])
+        (search / (p.stem + ".json")).write_text(
+            json.dumps(rows, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+    shutil.rmtree(parts)
+
+
+def generate():
+    taxa_path, payload, orders = load_base()
+    audit_path = ROOT / "data" / "detail_audit.json"
+    if not audit_path.exists():
+        raise RuntimeError("Run generate-details.py --audit first")
+
+    audit_report = json.loads(audit_path.read_text(encoding="utf-8"))
+    audit_orders = audit_report.get("orders", {})
+
+    targets = [
+        o for o in orders
+        if int(audit_orders.get(str(o["id"]), {}).get("species", 0)) > 0
     ]
-    if not orders:
-        raise RuntimeError("No ORDER taxa found in data/taxa.json")
+    skipped = len(orders) - len(targets)
 
-    print(f"Generating lower-rank detail for {len(orders)} orders")
-    print("Method: /species/search with higherTaxonKey + rank (not childrenAll)")
-
-    # ---------- PRE-FLIGHT ----------
-    known_names = ["Lepidoptera", "Trichoptera", "Coleoptera", "Passeriformes"]
-    probe = next(
-        (o for name in known_names for o in orders
-         if norm_name(o.get("canonicalName")) == norm_name(name)),
-        orders[0],
+    print(
+        f"GENERATE: {len(targets)} orders with species; "
+        f"skip {skipped} zero-species orders; {ORDER_WORKERS} order workers"
     )
 
-    print(f"Preflight: {probe.get('canonicalName')} ({probe.get('key', probe['id'])})")
-    probe_result = fetch_order(probe)
-
-    pf = len(probe_result["families"])
-    pg = len(probe_result["genera"])
-    ps = len(probe_result["species"])
-    print(f"Preflight result: {pf} families, {pg} genera, {ps} species")
-
-    if pf == 0 or pg == 0 or ps == 0:
-        raise RuntimeError(
-            "DETAIL PREFLIGHT FAILED: known order returned empty lower taxonomy. "
-            "Nothing was written to data/. This prevents another long empty run."
-        )
-
-    # Transactional staging: existing detail data is untouched until all validation passes.
     staging_root = ROOT / ".detail-staging"
     if staging_root.exists():
         shutil.rmtree(staging_root)
     staging = staging_root / "data"
-    for name in ("orders", "families", "search"):
+    for name in ("orders", "families", "_search_parts"):
         (staging / name).mkdir(parents=True, exist_ok=True)
 
-    search_shards = defaultdict(list)
-    order_meta = {}
     totals = defaultdict(int)
-    nonempty_orders = 0
+    order_meta = {}
+    failures = []
+    started = time.time()
 
-    probe_id = str(probe["id"])
-    prefetched = {probe_id: probe_result}
-
-    for idx, order in enumerate(orders, start=1):
-        order_id = str(order["id"])
-        order_name = order.get("canonicalName") or order.get("scientificName") or order_id
-
-        try:
-            result = prefetched.pop(order_id, None) or fetch_order(order)
-        except Exception as exc:
-            print(f"WARN {idx}/{len(orders)} {order_name}: {exc}")
-            continue
-
-        write_order(staging, order, result, search_shards)
-
-        f = len(result["families"])
-        g = len(result["genera"])
-        s = len(result["species"])
-        totals["families"] += f
-        totals["genera"] += g
-        totals["species"] += s
-        if s > 0:
-            nonempty_orders += 1
-
-        order_meta[order_id] = {
-            "name": order_name,
-            "families": f,
-            "genera": g,
-            "species": s,
-            "apiCounts": result["apiCounts"],
+    with ThreadPoolExecutor(max_workers=ORDER_WORKERS) as ex:
+        futures = {
+            ex.submit(fetch_order, o, audit_orders[str(o["id"])]): o
+            for o in targets
         }
 
-        print(f"[{idx}/{len(orders)}] {order_name}: {f} families, {g} genera, {s} species")
+        completed = 0
+        for fut in as_completed(futures):
+            order = futures[fut]
+            name = order.get("canonicalName") or str(order["id"])
+            try:
+                result = fut.result()
+                write_order(staging, order, result)
+            except Exception as exc:
+                failures.append({"order": name, "id": str(order["id"]), "error": str(exc)})
+                print(f"ERROR {name}: {exc}")
+                continue
 
-    # Conservative global validation. The preflight catches endpoint mistakes immediately;
-    # these checks catch partial or prematurely truncated runs.
-    if nonempty_orders < min(50, max(10, len(orders) // 20)):
-        raise RuntimeError(
-            f"DETAIL SANITY FAILED: only {nonempty_orders}/{len(orders)} orders have species"
-        )
-    if totals["families"] < 100 or totals["genera"] < 500 or totals["species"] < 5000:
-        raise RuntimeError(
-            "DETAIL SANITY FAILED: totals implausibly low: "
-            f"{dict(totals)}"
-        )
+            f = len(result["families"])
+            g = len(result["genera"])
+            s = len(result["species"])
+            totals["families"] += f
+            totals["genera"] += g
+            totals["species"] += s
+            order_meta[str(order["id"])] = {
+                "name": name, "families": f, "genera": g, "species": s,
+                "audit": result["audit"],
+            }
 
-    for prefix, rows in search_shards.items():
-        rows.sort(key=lambda x: x["n"])
-        (staging / "search" / f"{prefix}.json").write_text(
-            json.dumps(rows, ensure_ascii=False, separators=(",", ":")),
+            completed += 1
+            elapsed = time.time() - started
+            print(
+                f"DONE {completed}/{len(targets)} · {elapsed/60:.1f} min · "
+                f"{name}: {f} F / {g} G / {s} S"
+            )
+
+    if failures:
+        failure_path = ROOT / "data" / "detail_failures.json"
+        failure_path.write_text(
+            json.dumps(failures, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        raise RuntimeError(
+            f"DETAIL GENERATION FAILED for {len(failures)} orders. "
+            "See data/detail_failures.json. Live detail data was NOT replaced."
+        )
+
+    finalise_search(staging)
 
     generated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     manifest = {
         "generatedAt": generated_at,
-        "method": "GBIF Species Search higherTaxonKey + rank",
+        "method": "v42.2 audited + parallel detail generation",
+        "workers": {
+            "order": ORDER_WORKERS,
+            "familyWithinLargeOrder": FAMILY_WORKERS,
+        },
         "orders": order_meta,
         "totals": dict(totals),
-        "nonemptyOrders": nonempty_orders,
-        "searchShardCount": len(search_shards),
+        "auditSummary": audit_report.get("summary", {}),
     }
     (staging / "detail_manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8",
     )
 
-    # Only now replace live detail directories.
     live_data = ROOT / "data"
     for name in ("orders", "families", "search"):
         dst = live_data / name
@@ -578,7 +714,6 @@ def main():
         if dst.exists():
             shutil.rmtree(dst)
         shutil.move(str(src), str(dst))
-
     shutil.move(
         str(staging / "detail_manifest.json"),
         str(live_data / "detail_manifest.json"),
@@ -600,14 +735,21 @@ def main():
     )
 
     shutil.rmtree(staging_root, ignore_errors=True)
+    print("GENERATION OK")
+    print(json.dumps(dict(totals), ensure_ascii=False))
 
-    print(
-        "DONE: "
-        f"{len(order_meta)} orders, "
-        f"{totals['families']} families, "
-        f"{totals['genera']} genera, "
-        f"{totals['species']} species"
-    )
+
+def main():
+    parser = argparse.ArgumentParser()
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--audit", action="store_true")
+    group.add_argument("--generate", action="store_true")
+    args = parser.parse_args()
+
+    if args.audit:
+        audit()
+    else:
+        generate()
 
 
 if __name__ == "__main__":
