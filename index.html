@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — blijvende geometrische kustlijnen v43</title>
+<title>Atlas of Life — blijvende geometrische kustlijnen v44</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -18,6 +18,10 @@ svg.fastInteraction .taxonPath{filter:none!important}
 svg.fastInteraction .label{display:none!important}
 svg.fastInteraction .latin{display:none!important}
 .continentHaloWide,.continentHaloNear{display:none}
+.genusBoundary{fill:none;stroke:#fffdf8;stroke-width:2.2;stroke-opacity:.92;
+  stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke;
+  pointer-events:none;filter:drop-shadow(0 1px 1px #052b3a22)}
+
 .label{font-weight:760;fill:#18372f;pointer-events:none;paint-order:stroke;stroke:#fffdf8e8;stroke-width:2.4px;stroke-linejoin:round}
 .hidden{opacity:0;pointer-events:none}
 .top{position:absolute;left:16px;right:16px;top:14px;display:flex;gap:10px;align-items:center;pointer-events:none}
@@ -78,10 +82,10 @@ svg.fastInteraction .latin{display:none!important}
   <path d="M-100 850 C470 760 980 920 1450 835 S2010 745 2490 890"/>
   <path d="M-120 1200 C520 1080 980 1260 1510 1175 S2080 1090 2510 1210"/>
 </g>
-<g id="halos"></g><g id="regions"></g><g id="labels"></g>
+<g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v43 · families · genera · soorten</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v44 · 30% open · gelijke soorten</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -94,7 +98,7 @@ svg.fastInteraction .latin{display:none!important}
 (async()=>{try{
 const NS='http://www.w3.org/2000/svg';
 const svg=document.getElementById('map');
-const hg=document.getElementById('halos'), rg=document.getElementById('regions'), lg=document.getElementById('labels');
+const hg=document.getElementById('halos'), rg=document.getElementById('regions'), og=document.getElementById('genusOverlays'), lg=document.getElementById('labels');
 const status=document.getElementById('status'), zoomEl=document.getElementById('zoom');
 const levelEl=document.getElementById('level'), crumbs=document.getElementById('crumbs');
 
@@ -1519,7 +1523,7 @@ function refineContour(poly,factor=100,seed='coast'){
 function minZoom(t){
   const d=Math.max(0,t.depth||0);
   const rank=(t.rank||'').toUpperCase();
-  const rankZ={DOMAIN:.72,KINGDOM:.72,PHYLUM:.80,CLASS:1.10,ORDER:1.70,FAMILY:3.0,GENUS:4.8,SPECIES:7.2};
+  const rankZ={DOMAIN:.72,KINGDOM:.72,PHYLUM:.80,CLASS:1.10,ORDER:1.70,FAMILY:3.0,GENUS:4.8,SPECIES:9.0};
   return Math.max(rankZ[rank]||.88,.70+d*.31);
 }
 
@@ -1618,7 +1622,14 @@ let view={...world},target={...world},ptr=new Map(),drag=false,last=null,pinch=n
 function fit(r){let ar=innerWidth/innerHeight,rr=r.w/r.h;if(rr>ar){let nh=r.w/ar,d=nh-r.h;r.y-=d/2;r.h=nh}else{let nw=r.h*ar,d=nw-r.w;r.x-=d/2;r.w=nw}}
 function bbox(t){return t.box||polyBBox(t.poly)}
 function focusRect(t){
-  let r={...bbox(t)},pad=.2;
+  let subject=t;
+  /* v44: a species is never allowed to become a giant full-screen tile.
+     Keep the complete genus visible so the taxonomic context survives. */
+  if(detailRank(t)==='SPECIES'){
+    const genus=byId.get(String(t.parentId));
+    if(genus?.poly)subject=genus;
+  }
+  let r={...bbox(subject)},pad=detailRank(t)==='SPECIES'?.12:.20;
   r={x:r.x-r.w*pad,y:r.y-r.h*pad,w:r.w*(1+2*pad),h:r.h*(1+2*pad)};
   fit(r);
   return r;
@@ -1709,6 +1720,26 @@ function detailWeight(t){
   return Math.max(.0001,+t.weight||+t.mapWeight||1);
 }
 
+/* v44: every lower-level partition deliberately leaves 30% open space.
+   Species always have weight 1, so their target areas are exactly equal
+   inside a genus. */
+const DETAIL_LAND_FRACTION=.70;
+const generaWithVisibleSpecies=new Set();
+const genusOverlayIds=new Set();
+
+function ensureGenusBoundary(genus){
+  if(!genus?.poly||detailRank(genus)!=='GENUS')return;
+  const id=String(genus.id);
+  if(genusOverlayIds.has(id))return;
+  genusOverlayIds.add(id);
+
+  const p=document.createElementNS(NS,'path');
+  p.setAttribute('d',pathFromPoly(genus.poly));
+  p.setAttribute('class','genusBoundary');
+  p.dataset.genus=id;
+  og.appendChild(p);
+}
+
 function detailClipAxis(poly,axis,cut,keepLow){
   const value=p=>axis==='x'?p.x:p.y;
   const inside=p=>keepLow?value(p)<=cut+1e-8:value(p)>=cut-1e-8;
@@ -1784,8 +1815,8 @@ function detailPartition(poly,items,seed,depth=0,out=new Map()){
   return out;
 }
 
-/* Keep approximately 15% breathing room on FAMILY/GENUS/SPECIES levels. */
-function detailShapeFromCell(cell,t,coverage=.85){
+/* Keep exactly ~30% breathing room on FAMILY/GENUS/SPECIES levels. */
+function detailShapeFromCell(cell,t,coverage=DETAIL_LAND_FRACTION){
   if(!cell||cell.length<3)return cell;
   const c=polygonCentroid(cell);
   const target=absArea(cell)*coverage;
@@ -1844,18 +1875,21 @@ function layoutLazyChildren(parent){
     const cell=cells.get(String(c.id));
     if(!cell||cell.length<3)continue;
     c.cellPoly=cell;
-    c.poly=detailShapeFromCell(cell,c,.85);
+    c.poly=detailShapeFromCell(cell,c,DETAIL_LAND_FRACTION);
     c.box=polyBBox(c.poly);
     c.center=polygonCentroid(c.poly);
     c.area=absArea(c.poly);
 
     if(detailRank(c)==='SPECIES'){
       const gid=String(c.parentId);
+      /* Equal-weight partition + fixed 70% inset = equal visible species area. */
+      c.equalSpeciesArea=c.area;
       if(!deferredSpeciesByGenus.has(gid))deferredSpeciesByGenus.set(gid,[]);
       if(!deferredSpeciesIds.has(String(c.id))){
         deferredSpeciesIds.add(String(c.id));
         deferredSpeciesByGenus.get(gid).push(c);
       }
+      ensureGenusBoundary(parent);
     }else{
       renderTaxon(c);
       layoutLazyChildren(c);
@@ -2000,7 +2034,7 @@ function materialiseSpeciesForGenus(genus,z,forceOne=null){
 
   /* Only build species SVG nodes when a genus is genuinely explorable.
      A searched species can force just itself to materialise immediately. */
-  if(!forceOne && (z<7.2 || sw<260 || sh<140))return 0;
+  if(!forceOne && (z<9.0 || sw<300 || sh<170))return 0;
 
   let made=0;
   for(const s of list){
@@ -2012,11 +2046,15 @@ function materialiseSpeciesForGenus(genus,z,forceOne=null){
       made++;
     }
   }
+  if(made){
+    generaWithVisibleSpecies.add(gid);
+    ensureGenusBoundary(genus);
+  }
   return made;
 }
 
 function materialiseVisibleSpecies(z){
-  if(z<7.2)return 0;
+  if(z<9.0)return 0;
   let made=0;
 
   /* Iterate visible rendered genera only, never the complete species pool. */
@@ -2170,7 +2208,14 @@ function semantic(z,force=false){
     if(visible)deepest=Math.max(deepest,o.t.depth||0);
 
     const screenW=(o.t.box?.w||0)*z,screenH=(o.t.box?.h||0)*z;
-    const labelVisible=visible&&z>=+o.text.dataset.minz&&screenW>62&&screenH>26;
+    const rr=detailRank(o.t);
+    const genusContext=rr==='GENUS'&&generaWithVisibleSpecies.has(String(o.t.id));
+    const minW=rr==='SPECIES'?92:(rr==='GENUS'?72:62);
+    const minH=rr==='SPECIES'?44:(rr==='GENUS'?30:26);
+    const labelVisible=visible&&(
+      genusContext ||
+      (z>=+o.text.dataset.minz&&screenW>minW&&screenH>minH)
+    );
     o.text.style.display=labelVisible?'':'none';
     o.text.classList.toggle('hidden',!labelVisible);
 
@@ -2188,7 +2233,7 @@ function semantic(z,force=false){
 
   /* Never block the render loop on network I/O. */
   if(z>=2.5)queueMicrotask(()=>maybeLoadVisibleDetails(z));
-  if(z>=7.2)queueMicrotask(()=>{
+  if(z>=9.0)queueMicrotask(()=>{
     const made=materialiseVisibleSpecies(z);
     if(made)requestAnimationFrame(()=>semantic(z,true));
   });
@@ -2321,7 +2366,7 @@ function anim(ts){
   const landPct=Math.max(0,Math.min(100,100*(payload.meta.worldLandFraction||0)));
   const openPct=100-landPct;
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
-  status.textContent=`v43 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
+  status.textContent=`v44 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
 console.log('Atlas v42 · lazy family/genus/species + lightweight interaction · kingdom through order',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
