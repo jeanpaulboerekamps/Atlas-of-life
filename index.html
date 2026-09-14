@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — blijvende geometrische kustlijnen v44</title>
+<title>Atlas of Life — blijvende geometrische kustlijnen v45</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -85,7 +85,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v44 · 30% open · gelijke soorten</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v45 · 30% open · gelijke soorten</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1488,6 +1488,20 @@ function pathFromPoly(poly){
   for(let i=0;i<poly.length;i++)d+=` Q${poly[i].x},${poly[i].y} ${mids[i].x},${mids[i].y}`;
   return d+'Z'
 }
+function pathFromPolyExact(poly){
+  if(!poly||poly.length<3)return'';
+  let d=`M${poly[0].x},${poly[0].y}`;
+  for(let i=1;i<poly.length;i++)d+=` L${poly[i].x},${poly[i].y}`;
+  return d+'Z';
+}
+function displayPathForTaxon(t,poly){
+  const r=detailRank(t);
+  /* Never smooth FAMILY/GENUS/SPECIES across their mathematical cell edge.
+     The curved midpoint path used for higher ranks can bulge outside a tiny
+     cell and was the cause of the giant overlapping white species in v44. */
+  if(r==='FAMILY'||r==='GENUS'||r==='SPECIES')return pathFromPolyExact(poly);
+  return pathFromPoly(poly);
+}
 function refineContour(poly,factor=100,seed='coast'){
   if(!poly||poly.length<3||factor<=1)return poly;
   const out=[],n=poly.length;
@@ -1540,6 +1554,7 @@ function contourFactorFor(t){
 
 const elems=[];
 const renderedIds=new Set();
+const renderedById=new Map();
 
 /* v43: species geometry may be loaded without immediately creating thousands
    of SVG nodes. Species are materialised only inside genera that are actually
@@ -1550,14 +1565,28 @@ const deferredSpeciesIds=new Set();
 function renderTaxon(t){
   if(!t||t.id==='__life'||!t.poly||t.poly.length<3)return;
   const sid=String(t.id);
-  if(renderedIds.has(sid))return;
-  renderedIds.add(sid);
 
   t.box=polyBBox(t.poly);
   t.center=polygonCentroid(t.poly);
   t.area=absArea(t.poly);
 
   const drawnPoly=refineContour(t.poly,contourFactorFor(t),t.id);
+  const d=displayPathForTaxon(t,drawnPoly);
+
+  /* v45: geometry is allowed to change after lazy descendants arrive.
+     Update an existing SVG node instead of returning with stale geometry. */
+  const existing=renderedById.get(sid);
+  if(existing){
+    existing.p.setAttribute('d',d);
+    existing.p.setAttribute('fill',fillFor(t));
+    existing.text.setAttribute('x',t.center.x);
+    existing.text.setAttribute('y',t.center.y);
+    existing.text.textContent=t.vernacularName||t.canonicalName;
+    if(detailRank(t)==='GENUS')updateGenusBoundary(t);
+    return existing;
+  }
+
+  renderedIds.add(sid);
 
   if((t.depth||0)===0){
     const haloWide=document.createElementNS(NS,'path');
@@ -1574,7 +1603,7 @@ function renderTaxon(t){
   }
 
   const p=document.createElementNS(NS,'path');
-  p.setAttribute('d',pathFromPoly(drawnPoly));
+  p.setAttribute('d',d);
   p.setAttribute('fill',fillFor(t));
   p.setAttribute('fill-opacity','.98');
   p.setAttribute('class','taxonPath');
@@ -1609,7 +1638,10 @@ function renderTaxon(t){
   label.dataset.id=sid;
   lg.appendChild(label);
 
-  elems.push({t,p,text:label});
+  const obj={t,p,text:label};
+  elems.push(obj);
+  renderedById.set(sid,obj);
+  return obj;
 }
 
 [...taxa]
@@ -1726,18 +1758,30 @@ function detailWeight(t){
 const DETAIL_LAND_FRACTION=.70;
 const generaWithVisibleSpecies=new Set();
 const genusOverlayIds=new Set();
+const genusOverlayById=new Map();
 
+function updateGenusBoundary(genus){
+  if(!genus?.poly||detailRank(genus)!=='GENUS')return;
+  const id=String(genus.id);
+  const p=genusOverlayById.get(id);
+  if(p)p.setAttribute('d',pathFromPolyExact(genus.poly));
+}
 function ensureGenusBoundary(genus){
   if(!genus?.poly||detailRank(genus)!=='GENUS')return;
   const id=String(genus.id);
-  if(genusOverlayIds.has(id))return;
+  const existing=genusOverlayById.get(id);
+  if(existing){
+    existing.setAttribute('d',pathFromPolyExact(genus.poly));
+    return;
+  }
   genusOverlayIds.add(id);
 
   const p=document.createElementNS(NS,'path');
-  p.setAttribute('d',pathFromPoly(genus.poly));
+  p.setAttribute('d',pathFromPolyExact(genus.poly));
   p.setAttribute('class','genusBoundary');
   p.dataset.genus=id;
   og.appendChild(p);
+  genusOverlayById.set(id,p);
 }
 
 function detailClipAxis(poly,axis,cut,keepLow){
@@ -1882,7 +1926,9 @@ function layoutLazyChildren(parent){
 
     if(detailRank(c)==='SPECIES'){
       const gid=String(c.parentId);
-      /* Equal-weight partition + fixed 70% inset = equal visible species area. */
+      /* Equal-weight partition + fixed 70% inset = equal visible species area.
+         Keep both cell and visible target areas for runtime diagnostics. */
+      c.equalSpeciesCellArea=absArea(cell);
       c.equalSpeciesArea=c.area;
       if(!deferredSpeciesByGenus.has(gid))deferredSpeciesByGenus.set(gid,[]);
       if(!deferredSpeciesIds.has(String(c.id))){
@@ -1987,11 +2033,26 @@ async function ensureFamilySpecies(familyOrId){
       }
       loadedFamilies.add(id);
 
-      /* Species are partitioned inside each genus; any direct species
-         attached to the family are partitioned inside the family. */
-      const genera=(children.get(id)||[]).filter(t=>detailRank(t)==='GENUS');
-      for(const g of genera)layoutLazyChildren(g);
+      /* v45: FIRST give every genus its definitive position/shape inside
+         the family. Only THEN partition each definitive genus into species.
+         v44 did this in the opposite order first, leaving stale oversized
+         species geometry around during lazy relayout. */
       layoutLazyChildren(family);
+
+      const genera=(children.get(id)||[]).filter(t=>detailRank(t)==='GENUS');
+      for(const g of genera){
+        /* layoutLazyChildren(family) already recurses, but this explicit pass
+           guarantees species geometry uses the final genus polygon and also
+           refreshes any SVG node that was previously materialised. */
+        layoutLazyChildren(g);
+        renderTaxon(g);
+        ensureGenusBoundary(g);
+
+        for(const s of (children.get(String(g.id))||[])){
+          if(detailRank(s)==='SPECIES'&&renderedIds.has(String(s.id)))
+            renderTaxon(s);
+        }
+      }
 
       mergeSearchRows(added);
       const z=2400/view.w;
@@ -2366,7 +2427,7 @@ function anim(ts){
   const landPct=Math.max(0,Math.min(100,100*(payload.meta.worldLandFraction||0)));
   const openPct=100-landPct;
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
-  status.textContent=`v44 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
+  status.textContent=`v45 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
 console.log('Atlas v42 · lazy family/genus/species + lightweight interaction · kingdom through order',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
