@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — blijvende geometrische kustlijnen v38</title>
+<title>Atlas of Life — blijvende geometrische kustlijnen v39</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -77,7 +77,7 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 <g id="halos"></g><g id="regions"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v38 · blijvende kust · rijk–orde</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v39 · blijvende kust · rijk–orde</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -198,12 +198,19 @@ function fillFor(t){
     const id='level-gradient-'+rootName.toLowerCase()+'-'+level;
     const gradient=document.createElementNS(NS,'radialGradient');
     gradient.setAttribute('id',id);
-    gradient.setAttribute('cx','50%');gradient.setAttribute('cy','48%');
-    gradient.setAttribute('r','52%');gradient.setAttribute('fx','48%');gradient.setAttribute('fy','46%');
+    if(level===0){
+      /* v39: the root gradient radius reaches the rectangle corners.
+         This removes the broad dark/blurred-looking wedges in large kingdoms. */
+      gradient.setAttribute('cx','50%');gradient.setAttribute('cy','50%');
+      gradient.setAttribute('r','72%');gradient.setAttribute('fx','50%');gradient.setAttribute('fy','50%');
+    }else{
+      gradient.setAttribute('cx','50%');gradient.setAttribute('cy','48%');
+      gradient.setAttribute('r','52%');gradient.setAttribute('fx','48%');gradient.setAttribute('fy','46%');
+    }
     const stops = level===0
-      ? [ /* v38: finer, narrower kingdom/domain shoreline transition */
-          ['0%',own],['72%',own],['86%',mixHex(own,edge,.18)],
-          ['95%',mixHex(own,edge,.52)],['100%',edge]
+      ? [ /* v39: almost the whole realm keeps its own colour */
+          ['0%',own],['84%',own],['92%',mixHex(own,edge,.14)],
+          ['97%',mixHex(own,edge,.42)],['100%',edge]
         ]
       : [
           ['0%',own],['48%',own],['72%',mixHex(own,edge,.28)],
@@ -1507,7 +1514,7 @@ function minZoom(t){
   return Math.max(rankZ[rank]||.88,.70+d*.31);
 }
 
-/* V38 bakes the multiscale coast into each SVG path. This avoids Safari's
+/* V39 bakes the multiscale coast into each SVG path. This avoids Safari's
    maximum filtered-layer size, which made the land disappear when zooming. */
 function contourFactorFor(t){
   const rank=(t.rank||'').toUpperCase();
@@ -1529,7 +1536,12 @@ const elems=[];
     const haloNear=document.createElementNS(NS,'path');
     haloNear.setAttribute('d',pathFromPoly(drawnPoly));haloNear.setAttribute('class','continentHaloNear');haloNear.setAttribute('stroke-width','12');hg.appendChild(haloNear);
   }
-  const p=document.createElementNS(NS,'path');p.setAttribute('d',pathFromPoly(drawnPoly));p.setAttribute('fill',fillFor(t));p.setAttribute('fill-opacity','.98');p.setAttribute('class','taxonPath');p.setAttribute('filter','url(#landTexture)');p.setAttribute('stroke',edgeColorFor(t));p.setAttribute('stroke-opacity','.34');p.setAttribute('stroke-width','1.05');p.dataset.minz=minZoom(t);p.dataset.id=t.id;p.onclick=e=>{e.stopPropagation();focus(t)};rg.appendChild(p);
+  const p=document.createElementNS(NS,'path');p.setAttribute('d',pathFromPoly(drawnPoly));p.setAttribute('fill',fillFor(t));p.setAttribute('fill-opacity','.98');p.setAttribute('class','taxonPath');p.setAttribute('filter','url(#landTexture)');p.setAttribute('stroke',edgeColorFor(t));p.setAttribute('stroke-opacity','.34');p.setAttribute('stroke-width','1.05');{
+    const rr=(t.rank||'').toUpperCase();
+    const persistent=new Set(['DOMAIN','KINGDOM','PHYLUM','CLASS','ORDER']);
+    p.dataset.minz=persistent.has(rr)?.52:minZoom(t);
+  }
+  p.dataset.id=t.id;p.onclick=e=>{e.stopPropagation();focus(t)};rg.appendChild(p);
   const text=document.createElementNS(NS,'text');text.setAttribute('x',t.center.x);text.setAttribute('y',t.center.y);text.setAttribute('text-anchor','middle');text.setAttribute('class','label');text.textContent=t.vernacularName||t.canonicalName;text.dataset.minz=(minZoom(t)*1.02);text.dataset.id=t.id;lg.appendChild(text);
   elems.push({t,p,text})
 });
@@ -1549,6 +1561,8 @@ function renderCrumbs(t){let arr=[];while(t&&t.id!=='__life'){arr.unshift(t);t=b
 function norm(s){return String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')}
 document.getElementById('search').onkeydown=e=>{if(e.key!=='Enter')return;let q=norm(e.target.value),hit=taxa.find(t=>norm(t.canonicalName)===q)||taxa.find(t=>norm(t.vernacularName)===q)||taxa.find(t=>norm(t.canonicalName).includes(q));if(hit)focus(hit)}
 
+/* v39: paths through ORDER remain as geographic context at world scale.
+   Only labels still phase in semantically as the user zooms. */
 function semantic(z){
   if(Math.abs(z-lastSemantic)<.08)return;lastSemantic=z;let deepest=0;
   for(const o of elems){
@@ -1567,9 +1581,9 @@ function anim(){let k=.16;view.x+=(target.x-view.x)*k;view.y+=(target.y-view.y)*
   const landPct=Math.max(0,Math.min(100,100*(payload.meta.worldLandFraction||0)));
   const openPct=100-landPct;
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
-  status.textContent=`v38 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
+  status.textContent=`v39 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v38 · persistent geometric coast detail · kingdom through order',payload.meta.worldLandFraction);
+console.log('Atlas v39 · persistent geometric coast detail · kingdom through order',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
