@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — acht gewogen rijken v31</title>
+<title>Atlas of Life — acht gewogen rijken v32</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -59,7 +59,7 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 <g id="halos"></g><g id="regions"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v31 · 8 rijken · kleine rijken elk 1%</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v32 · 8 rijken · kleine rijken elk 0,5%</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -83,8 +83,8 @@ const byId=new Map(taxa.map(t=>[String(t.id),t]));
 let roots=taxa.filter(t=>!t.parentId||!byId.has(String(t.parentId)));
 
 /* The observation export can omit kingdoms with no mapped records. Keep all
-   eight iNaturalist kingdoms visible; absent ones become labelled empty
-   islands and receive the same fixed 1% allocation as the other small realms. */
+     eight iNaturalist kingdoms visible; absent ones become labelled empty
+     islands and receive the same fixed 0.5% allocation as the other small realms. */
 const requiredKingdoms=['Animalia','Plantae','Fungi','Bacteria','Archaea','Chromista','Protozoa','Viruses'];
 const sourceLife=roots.length===1&&String(roots[0].canonicalName||'').toLowerCase()==='life'
   ? roots[0]
@@ -1182,9 +1182,9 @@ computeRecursiveCoverage();
   }
 
   /* ---------- top-level world allocation ----------
-     Animalia, Plantae and Fungi share 95% according to their established
+     Animalia, Plantae and Fungi share 97.5% according to their established
      ORDER-derived weights. The five observation-poor realms each receive a
-     fixed 1% allocation, so all eight remain findable without dominating. */
+     fixed 0.5% allocation, so all eight remain findable without dominating. */
   const top=(children.get(String(roots[0].id))||[])
     .filter(t=>t&&t.id!=='__life');
 
@@ -1199,10 +1199,10 @@ computeRecursiveCoverage();
   const majorRaw=major.reduce((s,t)=>s+Math.max(.0001,anchorWeight.get(String(t.id))||weight(t)),0);
 
   for(const t of top){
-    if(minorNames.has(t.canonicalName))rootSpaceWeight.set(String(t.id),1);
+    if(minorNames.has(t.canonicalName))rootSpaceWeight.set(String(t.id),.5);
     else if(majorNames.has(t.canonicalName)){
       const raw=Math.max(.0001,anchorWeight.get(String(t.id))||weight(t));
-      rootSpaceWeight.set(String(t.id),95*raw/majorRaw);
+      rootSpaceWeight.set(String(t.id),97.5*raw/majorRaw);
     }
   }
   partitionCells(worldPoly,top,'WORLD-V31',0,rootCells);
@@ -1445,7 +1445,7 @@ function anim(){let k=.16;view.x+=(target.x-view.x)*k;view.y+=(target.y-view.y)*
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
   status.textContent=`${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v31 · eight kingdoms · five minor kingdoms allocated 1% each',payload.meta.worldLandFraction);
+console.log('Atlas v32 · eight kingdoms · five minor kingdoms allocated 0.5% each',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
