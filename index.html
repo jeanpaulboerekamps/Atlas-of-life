@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — v51 vaste compacte soorten</title>
+<title>Atlas of Life — v52 echte soorten diep zoombaar</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -85,7 +85,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v51 · vaste compacte soorten · hiërarchisch</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v52 · echte soorten · diep zoombaar</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1654,14 +1654,16 @@ let view={...world},target={...world},ptr=new Map(),drag=false,last=null,pinch=n
 function fit(r){let ar=innerWidth/innerHeight,rr=r.w/r.h;if(rr>ar){let nh=r.w/ar,d=nh-r.h;r.y-=d/2;r.h=nh}else{let nw=r.h*ar,d=nw-r.w;r.x-=d/2;r.w=nw}}
 function bbox(t){return t.box||polyBBox(t.poly)}
 function focusRect(t){
-  let subject=t;
-  /* v44: a species is never allowed to become a giant full-screen tile.
-     Keep the complete genus visible so the taxonomic context survives. */
+  /* v52: species are real map objects. Tapping a species zooms further into
+     that species while retaining nearby genus context; it no longer snaps
+     back to the complete genus (the v44 behaviour that blocked deep zoom). */
   if(detailRank(t)==='SPECIES'){
-    const genus=byId.get(String(t.parentId));
-    if(genus?.poly)subject=genus;
+    const c=t.center||polygonCentroid(t.poly);
+    const w=2400/SPECIES_FOCUS_Z;
+    const h=w/(innerWidth/innerHeight);
+    return{x:c.x-w/2,y:c.y-h/2,w,h};
   }
-  let r={...bbox(subject)},pad=detailRank(t)==='SPECIES'?.12:.20;
+  let r={...bbox(t)},pad=.20;
   r={x:r.x-r.w*pad,y:r.y-r.h*pad,w:r.w*(1+2*pad),h:r.h*(1+2*pad)};
   fit(r);
   return r;
@@ -1757,11 +1759,14 @@ function detailWeight(t){
    NO absolute world-area species constant: every level is allocated inside its
    existing parent polygon, preserving the established ORDER geometry. */
 const DETAIL_LAND_FRACTION=.70;
-/* v51: FAMILY/GENUS retain the 70% hierarchical land allocation.
+/* v52: FAMILY/GENUS retain the 70% hierarchical land allocation.
    SPECIES are no longer scaled copies of treemap cells. Every species is a
    compact equal-area symbol with a fixed world-space radius. The partition
    cell is used only to choose its position, never its size or shape. */
 const SPECIES_RADIUS=.12;
+const SPECIES_MATERIALISE_Z=6.0;
+const SPECIES_FOCUS_Z=220;
+const MAX_MANUAL_Z=800;
 const SPECIES_VERTICES=14;
 const generaWithVisibleSpecies=new Set();
 const genusOverlayIds=new Set();
@@ -1895,7 +1900,7 @@ function detailShapeFromCell(cell,t,coverage=DETAIL_LAND_FRACTION){
 }
 
 
-/* v51: fixed compact species geometry. This deliberately ignores allocation
+/* v52: fixed compact species geometry retained from v51. This deliberately ignores allocation
    cell area/aspect ratio. All species therefore have exactly the same polygon
    area (up to floating point precision) and cannot inflate in species-poor
    genera. */
@@ -2125,7 +2130,7 @@ function materialiseSpeciesForGenus(genus,z,forceOne=null){
 
   /* Only build species SVG nodes when a genus is genuinely explorable.
      A searched species can force just itself to materialise immediately. */
-  if(!forceOne && (z<9.0 || sw<300 || sh<170))return 0;
+  if(!forceOne && z<SPECIES_MATERIALISE_Z)return 0;
 
   let made=0;
   for(const s of list){
@@ -2145,7 +2150,7 @@ function materialiseSpeciesForGenus(genus,z,forceOne=null){
 }
 
 function materialiseVisibleSpecies(z){
-  if(z<9.0)return 0;
+  if(z<SPECIES_MATERIALISE_Z)return 0;
   let made=0;
 
   /* Iterate visible rendered genera only, never the complete species pool. */
@@ -2301,8 +2306,8 @@ function semantic(z,force=false){
     const screenW=(o.t.box?.w||0)*z,screenH=(o.t.box?.h||0)*z;
     const rr=detailRank(o.t);
     const genusContext=rr==='GENUS'&&generaWithVisibleSpecies.has(String(o.t.id));
-    const minW=rr==='SPECIES'?92:(rr==='GENUS'?72:62);
-    const minH=rr==='SPECIES'?44:(rr==='GENUS'?30:26);
+    const minW=rr==='SPECIES'?18:(rr==='GENUS'?72:62);
+    const minH=rr==='SPECIES'?18:(rr==='GENUS'?30:26);
     const labelVisible=visible&&(
       genusContext ||
       (z>=+o.text.dataset.minz&&screenW>minW&&screenH>minH)
@@ -2324,7 +2329,7 @@ function semantic(z,force=false){
 
   /* Never block the render loop on network I/O. */
   if(z>=2.5)queueMicrotask(()=>maybeLoadVisibleDetails(z));
-  if(z>=9.0)queueMicrotask(()=>{
+  if(z>=SPECIES_MATERIALISE_Z)queueMicrotask(()=>{
     const made=materialiseVisibleSpecies(z);
     if(made)requestAnimationFrame(()=>semantic(z,true));
   });
@@ -2360,8 +2365,8 @@ svg.addEventListener('wheel',e=>{
   const wx=target.x+px*target.w,wy=target.y+py*target.h;
   const f=Math.exp(e.deltaY*.0012);
 
-  target.w=Math.max(24,Math.min(3000,target.w*f));
-  target.h=Math.max(15,Math.min(1900,target.h*f));
+  target.w=Math.max(2400/MAX_MANUAL_Z,Math.min(3000,target.w*f));
+  target.h=Math.max(1500/MAX_MANUAL_Z,Math.min(1900,target.h*f));
   target.x=wx-px*target.w;target.y=wy-py*target.h;
 
   directTargetToView();
@@ -2400,8 +2405,8 @@ svg.onpointermove=e=>{
     const px=(pinch.cx-r.left)/r.width,py=(pinch.cy-r.top)/r.height;
     const wx=pinch.v.x+px*pinch.v.w,wy=pinch.v.y+py*pinch.v.h;
 
-    target.w=Math.max(24,Math.min(3000,pinch.v.w*sc));
-    target.h=Math.max(15,Math.min(1900,pinch.v.h*sc));
+    target.w=Math.max(2400/MAX_MANUAL_Z,Math.min(3000,pinch.v.w*sc));
+    target.h=Math.max(1500/MAX_MANUAL_Z,Math.min(1900,pinch.v.h*sc));
     target.x=wx-px*target.w;
     target.y=wy-py*target.h;
     directTargetToView();
@@ -2457,9 +2462,9 @@ function anim(ts){
   const landPct=Math.max(0,Math.min(100,100*(payload.meta.worldLandFraction||0)));
   const openPct=100-landPct;
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
-  status.textContent=`v51 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
+  status.textContent=`v52 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v49 · hierarchical species-count detail within fixed ORDER geometry',payload.meta.worldLandFraction);
+console.log('Atlas v52 · real fixed species with deep zoom',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
