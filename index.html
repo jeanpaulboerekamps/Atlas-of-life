@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — v56 soorten zonder witte tekstlaag</title>
+<title>Atlas of Life — v57 uniforme soorten en semantische labels</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -23,7 +23,7 @@ svg.fastInteraction .latin{display:none!important}
   stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke;
   pointer-events:none;filter:drop-shadow(0 1px 1px #052b3a22)}
 
-.label{font-weight:760;fill:#18372f;pointer-events:none;paint-order:stroke;stroke:#fffdf8e8;stroke-width:2.4px;stroke-linejoin:round}
+.label{font-weight:760;fill:#102f28;pointer-events:none;stroke:none;paint-order:normal}
 .hidden{opacity:0;pointer-events:none}
 .top{position:absolute;left:16px;right:16px;top:14px;display:flex;gap:10px;align-items:center;pointer-events:none}
 .card{background:var(--panel);border:1px solid #35524723;border-radius:16px;box-shadow:0 9px 30px #3552471d;backdrop-filter:blur(11px);pointer-events:auto}
@@ -86,7 +86,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v56 · soorten zonder witte tekstlaag · 30% open</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v57 · uniforme soorten · semantische labels · 30% open</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1640,9 +1640,8 @@ function renderTaxon(t){
   label.setAttribute('y',t.center.y);
   label.setAttribute('text-anchor','middle');
   label.setAttribute('class','label');
-  if(detailRank(t)==='SPECIES')label.style.display='none';
   label.textContent=t.vernacularName||t.canonicalName;
-  label.dataset.minz=(minZoom(t)*1.02);
+  label.dataset.minz=(detailRank(t)==='SPECIES'?Math.max(18,minZoom(t)*1.6):(minZoom(t)*1.02));
   label.dataset.id=sid;
   lg.appendChild(label);
 
@@ -1933,35 +1932,21 @@ function layoutLazyChildren(parent){
     .filter(c=>['FAMILY','GENUS','SPECIES'].includes(detailRank(c)));
   if(!cs.length)return;
 
-  /* v55: FAMILY and GENUS keep the proven weighted recursive partition.
-     For GENUS -> SPECIES the allocation cells are still equal-weight (1 each),
-     but the visible species are compact equal circles that stay INSIDE those
-     disjoint cells. One common radius is chosen for the whole genus, so every
-     species has exactly the same visible area and no long treemap sliver can
-     turn into a huge white/coloured shape at deep zoom. */
+  /* v57: FAMILY and GENUS keep the proven weighted recursive partition.
+     SPECIES still have weight 1, but their visible area is now normalised at
+     ORDER level instead of GENUS level. Therefore every species belonging to
+     the same order has exactly the same visible area. Three 70% land steps
+     (order->family->genus->species) determine the species-area budget. */
   const cells=detailPartition(parent.poly,cs,String(parent.id),0,new Map());
   const speciesLevel=detailRank(parent)==='GENUS' && cs.every(c=>detailRank(c)==='SPECIES');
   let commonSpeciesRadius=null;
   if(speciesLevel){
-    const valid=cs.map(c=>({c,cell:cells.get(String(c.id))})).filter(x=>x.cell&&x.cell.length>=3);
-    const avgCellArea=valid.length?valid.reduce((s,x)=>s+absArea(x.cell),0)/valid.length:0;
-    const targetR=Math.sqrt(Math.max(0,avgCellArea*DETAIL_LAND_FRACTION)/Math.PI);
-    let minFit=targetR;
-    for(const x of valid){
-      const ctr=polygonCentroid(x.cell);
-      let lo=0,hi=targetR;
-      for(let k=0;k<24;k++){
-        const r=(lo+hi)/2;
-        let ok=pointInPoly(ctr,x.cell);
-        for(let j=0;ok&&j<24;j++){
-          const a=2*Math.PI*j/24;
-          if(!pointInPoly({x:ctr.x+Math.cos(a)*r,y:ctr.y+Math.sin(a)*r},x.cell))ok=false;
-        }
-        if(ok)lo=r;else hi=r;
-      }
-      minFit=Math.min(minFit,lo);
-    }
-    commonSpeciesRadius=Math.max(0,minFit*.96);
+    let order=parent;
+    while(order && detailRank(order)!=='ORDER') order=byId.get(String(order.parentId));
+    const n=Math.max(1,+order?.speciesCount||1);
+    const orderArea=Math.max(1e-9,order?.area||absArea(order?.poly||[]));
+    const targetSpeciesArea=orderArea*Math.pow(DETAIL_LAND_FRACTION,3)/n;
+    commonSpeciesRadius=Math.sqrt(targetSpeciesArea/Math.PI);
   }
 
   for(const c of cs){
@@ -2328,17 +2313,12 @@ function semantic(z,force=false){
 
     const screenW=(o.t.box?.w||0)*z,screenH=(o.t.box?.h||0)*z;
     const rr=detailRank(o.t);
-    const genusContext=rr==='GENUS'&&generaWithVisibleSpecies.has(String(o.t.id));
-    const minW=rr==='SPECIES'?18:(rr==='GENUS'?72:62);
-    const minH=rr==='SPECIES'?18:(rr==='GENUS'?30:26);
-    /* v56: species geometry is already the visual species layer. Do not add a
-       second text layer over it; that was perceived as large white species
-       objects because .label uses a white paint-order stroke. Higher-rank
-       labels keep the proven semantic behaviour unchanged. */
-    const labelVisible=rr!=='SPECIES'&&visible&&(
-      genusContext ||
-      (z>=+o.text.dataset.minz&&screenW>minW&&screenH>minH)
-    );
+    const minW=rr==='SPECIES'?24:(rr==='GENUS'?72:62);
+    const minH=rr==='SPECIES'?20:(rr==='GENUS'?30:26);
+    /* v57: one semantic rule for every rank. Labels have no white backing or
+       halo, species names appear once their species is large enough on screen,
+       and lower-rank labels disappear again automatically while zooming out. */
+    const labelVisible=visible && z>=+o.text.dataset.minz && screenW>minW && screenH>minH;
     o.text.style.display=labelVisible?'':'none';
     o.text.classList.toggle('hidden',!labelVisible);
 
