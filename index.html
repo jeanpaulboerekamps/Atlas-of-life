@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — v62 compacte genera · complete genera · snelle layout</title>
+<title>Atlas of Life — v63 veilige genusvormen</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -86,7 +86,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v62 · compacte genera · complete genera · snelle layout · 30% open</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v63 · veilige genusvormen · passende soorten</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1872,6 +1872,20 @@ function detailPartition(poly,items,seed,depth=0,out=new Map()){
   let pA=detailClipAxis(poly,axis,cut,true);
   let pB=detailClipAxis(poly,axis,cut,false);
 
+  // Prefer compact weighted genus cells before shaping, without moving vertices.
+  if(items.every(t=>detailRank(t)==='GENUS')){
+    const quality=p=>{
+      if(p.length<3)return Infinity;
+      const b=polyBBox(p),a=absArea(p);
+      let perimeter=0;
+      for(let i=0;i<p.length;i++)perimeter+=Math.hypot(p[i].x-p[(i+1)%p.length].x,p[i].y-p[(i+1)%p.length].y);
+      return perimeter*perimeter/Math.max(a,1e-12)+4*Math.max(b.w/b.h,b.h/b.w);
+    };
+    const other=axis==='x'?'y':'x',otherCut=detailCutForArea(poly,other,fraction);
+    const qA=detailClipAxis(poly,other,otherCut,true),qB=detailClipAxis(poly,other,otherCut,false);
+    if(Math.max(quality(qA),quality(qB))<Math.max(quality(pA),quality(pB))*.98){pA=qA;pB=qB;}
+  }
+
   if(pA.length<3||pB.length<3){
     axis=axis==='x'?'y':'x';
     cut=detailCutForArea(poly,axis,fraction);
@@ -1887,6 +1901,7 @@ function detailPartition(poly,items,seed,depth=0,out=new Map()){
 /* Shape a child inside its allocation cell at the requested visual coverage. */
 function detailShapeFromCell(cell,t,coverage=DETAIL_LAND_FRACTION){
   if(!cell||cell.length<3)return cell;
+  cell=detailUntanglePolygon(cell);
   const c=polygonCentroid(cell);
   const target=absArea(cell)*coverage;
 
@@ -1909,74 +1924,102 @@ function detailShapeFromCell(cell,t,coverage=DETAIL_LAND_FRACTION){
     best=q;
     if(absArea(q)<target)lo=m;else hi=m;
   }
-  return cleanPoly(best);
-}
-
-/* v62: genus allocation cells can inherit long points from recursive cuts.
-   Round only the visible genus land, cap remote vertices and limit its aspect
-   ratio. The allocation cell itself remains untouched, so weights and the
-   family partition stay exact. */
-function detailCompactGenusShape(cell,t,coverage=DETAIL_LAND_FRACTION){
-  if(!cell||cell.length<3)return cell;
-  const centre=polygonCentroid(cell),target=absArea(cell)*coverage;
-
-  let shaped=cell.map(p=>({x:p.x,y:p.y}));
-  const radii=shaped.map(p=>Math.hypot(p.x-centre.x,p.y-centre.y)).sort((a,b)=>a-b);
-  const median=radii[Math.floor(radii.length/2)]||1;
-  const maxRadius=median*1.62;
-  shaped=shaped.map(p=>{
-    const dx=p.x-centre.x,dy=p.y-centre.y,d=Math.hypot(dx,dy)||1;
-    const f=Math.min(1,maxRadius/d);
-    return{x:centre.x+dx*f,y:centre.y+dy*f};
-  });
-
-  /* Two gentle corner-cutting passes remove acute tips while retaining an
-     organic, non-elliptical silhouette. For convex allocation cells these
-     points remain inside the cell. */
-  for(let pass=0;pass<2;pass++){
-    const rounded=[];
-    for(let i=0;i<shaped.length;i++){
-      const a=shaped[i],b=shaped[(i+1)%shaped.length];
-      rounded.push({x:a.x*.72+b.x*.28,y:a.y*.72+b.y*.28});
-      rounded.push({x:a.x*.28+b.x*.72,y:a.y*.28+b.y*.72});
-    }
-    shaped=rounded;
+  const result=cleanPoly(best);
+  if(detailRank(t)==='GENUS'){
+    let perimeter=0;
+    for(let i=0;i<result.length;i++)perimeter+=Math.hypot(result[i].x-result[(i+1)%result.length].x,result[i].y-result[(i+1)%result.length].y);
+    const irregularity=perimeter*perimeter/(4*Math.PI*Math.max(1e-12,absArea(result)));
+    if(!detailSimplePolygon(result)||irregularity>2.4)return detailSafeGenusCore(cell,t);
   }
-
-  /* Contract only the long axis. A 1.75 cap still allows lively variation,
-     but prevents a genus from becoming a needle or a giant triangular arm. */
-  let box=polyBBox(shaped);
-  if(box.w>box.h*1.75){
-    const f=box.h*1.75/box.w;
-    shaped=shaped.map(p=>({x:centre.x+(p.x-centre.x)*f,y:p.y}));
-  }else if(box.h>box.w*1.75){
-    const f=box.w*1.75/box.h;
-    shaped=shaped.map(p=>({x:p.x,y:centre.y+(p.y-centre.y)*f}));
-  }
-
-  const fits=q=>q.every((p,i)=>pointInPoly(p,cell)&&pointInPoly({
-    x:(p.x+q[(i+1)%q.length].x)/2,
-    y:(p.y+q[(i+1)%q.length].y)/2
-  },cell));
-  const scaled=s=>shaped.map(p=>({
-    x:centre.x+(p.x-centre.x)*s,
-    y:centre.y+(p.y-centre.y)*s
-  }));
-
-  /* Recover as much of the normal 70% land budget as the compact silhouette
-     can safely occupy without crossing its allocation cell. */
-  const wanted=Math.sqrt(target/Math.max(1e-9,absArea(shaped)));
-  let lo=.05,hi=Math.max(1,wanted*1.08),best=scaled(.05);
-  for(let k=0;k<30;k++){
-    const m=(lo+hi)/2,q=scaled(m);
-    if(fits(q)){best=q;lo=m}else hi=m;
-  }
-  if(absArea(best)>target)best=scaled(lo*Math.sqrt(target/absArea(best)));
-  return cleanPoly(best);
+  return result;
 }
 
 
 /* v55: species use compact equal-radius geometry inside equal-weight allocation cells. */
+
+function detailSimplePolygon(poly){
+  const cross=(a,b,c)=>(b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x);
+  for(let i=0;i<poly.length;i++)for(let j=i+2;j<poly.length;j++){
+    if(i===0&&j===poly.length-1)continue;
+    const a=poly[i],b=poly[(i+1)%poly.length],c=poly[j],d=poly[(j+1)%poly.length];
+    if(cross(a,b,c)*cross(a,b,d)<0&&cross(c,d,a)*cross(c,d,b)<0)return false;
+  }
+  return poly.length>=3&&absArea(poly)>0;
+}
+
+// A clipped concave ancestor can already contain crossed edges. Uncross
+// them by reversing the intervening boundary chain (2-opt), never by
+// pulling vertices towards a centroid outside the polygon.
+function detailUntanglePolygon(poly){
+  const p=poly.map(q=>({x:q.x,y:q.y}));
+  const cross=(a,b,c)=>(b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x);
+  for(let pass=0;pass<p.length*p.length;pass++){
+    let changed=false;
+    outer:for(let i=0;i<p.length;i++)for(let j=i+2;j<p.length;j++){
+      if(i===0&&j===p.length-1)continue;
+      const a=p[i],b=p[(i+1)%p.length],c=p[j],d=p[(j+1)%p.length];
+      if(cross(a,b,c)*cross(a,b,d)<0&&cross(c,d,a)*cross(c,d,b)<0){
+        const reversed=p.slice(i+1,j+1).reverse();
+        p.splice(i+1,j-i,...reversed);changed=true;break outer;
+      }
+    }
+    if(!changed)return p;
+  }
+  throw new Error('Ongeldige taxoncontour');
+}
+
+// Exact boundary clearance, including concave bays; no sampled circle perimeter.
+function detailClearance(p,poly){
+  if(!pointInPoly(p,poly))return 0;
+  let d=Infinity;
+  for(let i=0;i<poly.length;i++){
+    const a=poly[i],b=poly[(i+1)%poly.length],dx=b.x-a.x,dy=b.y-a.y;
+    const u=Math.max(0,Math.min(1,((p.x-a.x)*dx+(p.y-a.y)*dy)/(dx*dx+dy*dy||1)));
+    d=Math.min(d,Math.hypot(p.x-a.x-u*dx,p.y-a.y-u*dy));
+  }
+  return d;
+}
+// Only pathological silhouettes use a compact core. Every point of this
+// gently lobed contour lies inside a verified inscribed circle.
+function detailSafeGenusCore(poly,t){
+  const b=polyBBox(poly);
+  let best={x:b.x+b.w/2,y:b.y+b.h/2},radius=detailClearance(best,poly);
+  let region={...b};
+  for(let pass=0;pass<4;pass++){
+    for(let iy=0;iy<=20;iy++)for(let ix=0;ix<=20;ix++){
+      const p={x:region.x+region.w*ix/20,y:region.y+region.h*iy/20};
+      const r=detailClearance(p,poly);
+      if(r>radius){radius=r;best=p;}
+    }
+    region={x:best.x-region.w/10,y:best.y-region.h/10,w:region.w/5,h:region.h/5};
+  }
+  if(!(radius>0))throw new Error('Geen veilige genuskern');
+  const phase=h2(t.id,63000)*Math.PI*2;
+  return Array.from({length:40},(_,i)=>{
+    const a=i*Math.PI*2/40,r=radius*(.94+.025*Math.sin(3*a+phase));
+    return{x:best.x+Math.cos(a)*r,y:best.y+Math.sin(a)*r};
+  });
+}
+function detailPackSpecies(poly,count,wanted){
+  const b=polyBBox(poly);
+  function attempt(r){
+    const points=[],dx=2.12*r,dy=Math.sqrt(3)*1.06*r;
+    for(let row=0,y=b.y+r;y<=b.y+b.h-r;y+=dy,row++){
+      for(let x=b.x+r+(row%2)*dx/2;x<=b.x+b.w-r;x+=dx){
+        const p={x,y};
+        if(detailClearance(p,poly)>=r*1.025)points.push(p);
+        if(points.length===count)return points;
+      }
+    }
+    return null;
+  }
+  let r=Math.min(wanted,Math.sqrt(absArea(poly)/Math.max(1,count)/Math.PI)*.8);
+  for(let k=0;k<100;k++,r*=.88){
+    const points=attempt(r);
+    if(points)return{points,r};
+  }
+  throw new Error('Geen geldige soortenplaatsing gevonden');
+}
 
 function addLazyTaxon(raw){
   if(!raw||raw.id==null)return byId.get(String(raw?.id));
@@ -2033,26 +2076,15 @@ function layoutLazyChildren(parent){
     commonSpeciesRadius=Math.sqrt(targetSpeciesArea/Math.PI)*SPECIES_RADIUS_GAP_FACTOR;
   }
 
-  /* v59: equal species keep exactly the same radius, but their centres are no
-     longer frozen at recursive cell centroids. Relax them as equal circles
-     inside the definitive genus polygon. This removes accidental overlap
-     without changing species area. */
+  /* v63: a hexagonal lattice gives separated centres. Exact segment distance
+     guarantees each complete circle fits; locally reduce the common radius
+     if the order-wide requested size cannot fit this genus. */
   let relaxedSpecies=null;
   if(speciesLevel && commonSpeciesRadius){
-    const ctr=polygonCentroid(parent.poly);
-    relaxedSpecies=cs.map(c=>{
-      const cell=cells.get(String(c.id));
-      const q=cell&&cell.length>=3?polygonCentroid(cell):ctr;
-      return {t:c,x:q.x,y:q.y,rx:commonSpeciesRadius,ry:commonSpeciesRadius,bound:commonSpeciesRadius};
-    });
-    /* v61: resolveCollisions() already performs 230 relaxation passes.
-       v59 accidentally called that complete solver 80 times (= 18,400 passes),
-       which made family/species loading needlessly expensive and could stall
-       iPad Safari while zooming. One solver run is sufficient; a final inward
-       nudge keeps equal circles inside the definitive genus polygon. */
-    for(const q of relaxedSpecies)nudgeInside(parent.poly,q,ctr);
-    resolveCollisions(relaxedSpecies,parent.poly,ctr);
-    for(const q of relaxedSpecies)nudgeInside(parent.poly,q,ctr);
+    const packed=detailPackSpecies(parent.poly,cs.length,commonSpeciesRadius);
+    parent.speciesRadiusScale=packed.r/commonSpeciesRadius;
+    commonSpeciesRadius=packed.r;
+    relaxedSpecies=cs.map((c,i)=>({t:c,...packed.points[i]}));
   }
 
   for(const c of cs){
@@ -2071,9 +2103,7 @@ function layoutLazyChildren(parent){
       }
       c.poly=cleanPoly(pts);
     }else{
-      c.poly=childRank==='GENUS'
-        ? detailCompactGenusShape(cell,c,DETAIL_LAND_FRACTION)
-        : detailShapeFromCell(cell,c,DETAIL_LAND_FRACTION);
+      c.poly=detailShapeFromCell(cell,c,DETAIL_LAND_FRACTION);
     }
     c.box=polyBBox(c.poly);
     c.center=polygonCentroid(c.poly);
@@ -2622,7 +2652,7 @@ function anim(ts){
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
   status.textContent=`v55 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v59 · relaxed equal species + repaired genera + binomial labels',payload.meta.worldLandFraction);
+console.log('Atlas v63 · contained species + compact partition selection',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
