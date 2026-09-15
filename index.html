@@ -85,7 +85,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v46 · vaste soorten · 30% open</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v47 · soort → genus → familie · 30% open</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1757,8 +1757,28 @@ function detailWeight(t){
    absolute map area. Its private slot is larger by 1/0.70, leaving 30%
    breathing room around the fixed species island. */
 const DETAIL_LAND_FRACTION=.70;
-const FIXED_SPECIES_LAND_AREA=.80;
+/* v47: one species is a genuinely absolute map unit.  At 100× this is
+   deliberately a small island (~16 px equivalent diameter), rather than a
+   genus-filling balloon.  Higher detail ranks are derived bottom-up from this
+   unit: n species -> n slots of identical size. */
+const FIXED_SPECIES_LAND_AREA=.060;
 const FIXED_SPECIES_SLOT_AREA=FIXED_SPECIES_LAND_AREA/DETAIL_LAND_FRACTION;
+function speciesDrivenTargetArea(t){
+  const r=detailRank(t),n=Math.max(1,+t.speciesCount||1);
+  if(r==='SPECIES')return FIXED_SPECIES_SLOT_AREA;
+  if(r==='GENUS')return n*FIXED_SPECIES_SLOT_AREA;
+  /* Genera occupy 70% of a family; this makes FAMILY area derive from the
+     same species unit while retaining the requested 30% family breathing room. */
+  if(r==='FAMILY')return n*FIXED_SPECIES_SLOT_AREA/DETAIL_LAND_FRACTION;
+  return null;
+}
+function scaledSubsetToArea(cell,targetArea){
+  if(!cell||cell.length<3)return cell;
+  const a=Math.max(1e-9,absArea(cell));
+  const c=polygonCentroid(cell);
+  const sc=Math.min(1,Math.sqrt(Math.max(1e-9,targetArea)/a));
+  return cleanPoly(cell.map(p=>({x:c.x+(p.x-c.x)*sc,y:c.y+(p.y-c.y)*sc})));
+}
 const generaWithVisibleSpecies=new Set();
 const genusOverlayIds=new Set();
 const genusOverlayById=new Map();
@@ -1922,19 +1942,11 @@ function layoutLazyChildren(parent){
     const cell=cells.get(String(c.id));
     if(!cell||cell.length<3)continue;
     if(detailRank(c)==='SPECIES'){
-      /* v46 FIX: the partition cell is only a placement envelope. It must NOT
-         determine species size. Scale a private slot about its centroid to one
-         absolute area, then use 70% of that slot for the visible species.
-         Because every private slot is a scaled subset of a disjoint partition
-         cell, species cannot overlap; because the slot area is constant, every
-         visible species has the same absolute area everywhere in the atlas. */
+      /* v47: the partition only supplies a non-overlapping POSITION.  The
+         species slot itself has one global absolute area, independent of the
+         genus polygon, family polygon, observations, or zoom. */
       const rawCellArea=Math.max(1e-9,absArea(cell));
-      const cc=polygonCentroid(cell);
-      const slotScale=Math.min(1,Math.sqrt(FIXED_SPECIES_SLOT_AREA/rawCellArea));
-      const slot=cleanPoly(cell.map(p=>({
-        x:cc.x+(p.x-cc.x)*slotScale,
-        y:cc.y+(p.y-cc.y)*slotScale
-      })));
+      const slot=scaledSubsetToArea(cell,FIXED_SPECIES_SLOT_AREA);
       c.cellPoly=slot;
       c.poly=detailShapeFromCell(slot,c,DETAIL_LAND_FRACTION);
       c.box=polyBBox(c.poly);
@@ -1953,8 +1965,16 @@ function layoutLazyChildren(parent){
       }
       ensureGenusBoundary(parent);
     }else{
-      c.cellPoly=cell;
-      c.poly=detailShapeFromCell(cell,c,DETAIL_LAND_FRACTION);
+      /* v47 bottom-up hierarchy.  FAMILY and GENUS no longer expand to consume
+         the complete parent partition.  Their absolute target area is derived
+         from descendant species, while detailPartition still determines their
+         relative position and guarantees disjoint envelopes. */
+      const targetArea=speciesDrivenTargetArea(c);
+      const privateCell=targetArea==null?cell:scaledSubsetToArea(cell,targetArea/DETAIL_LAND_FRACTION);
+      c.cellPoly=privateCell;
+      c.poly=detailShapeFromCell(privateCell,c,DETAIL_LAND_FRACTION);
+      c.speciesDrivenTargetArea=targetArea;
+      c.speciesDrivenClipped=targetArea!=null && absArea(cell)+1e-7<targetArea/DETAIL_LAND_FRACTION;
       c.box=polyBBox(c.poly);
       c.center=polygonCentroid(c.poly);
       c.area=absArea(c.poly);
@@ -2450,7 +2470,7 @@ function anim(ts){
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
   status.textContent=`v45 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v42 · lazy family/genus/species + lightweight interaction · kingdom through order',payload.meta.worldLandFraction);
+console.log('Atlas v47 · species-driven FAMILY/GENUS + fixed absolute species units',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
