@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — v53 één specieslaag</title>
+<title>Atlas of Life — v54 recursieve soorten</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -86,7 +86,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v53 · één specieslaag · vaste stippen</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v54 · recursief · 30% open op elk niveau</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1766,15 +1766,13 @@ function detailWeight(t){
    NO absolute world-area species constant: every level is allocated inside its
    existing parent polygon, preserving the established ORDER geometry. */
 const DETAIL_LAND_FRACTION=.70;
-/* v52: FAMILY/GENUS retain the 70% hierarchical land allocation.
-   SPECIES are no longer scaled copies of treemap cells. Every species is a
-   compact equal-area symbol with a fixed world-space radius. The partition
-   cell is used only to choose its position, never its size or shape. */
-const SPECIES_RADIUS=.055;
+/* v54: the exact same recursive allocation rule is used for FAMILY, GENUS
+   and SPECIES. Every species has weight 1. Every child occupies 70% of its
+   allocation cell, leaving 30% open space at that level. There is no fixed
+   species radius and no alternate species geometry. */
 const SPECIES_MATERIALISE_Z=6.0;
 const SPECIES_FOCUS_Z=220;
 const MAX_MANUAL_Z=800;
-const SPECIES_VERTICES=14;
 const generaWithVisibleSpecies=new Set();
 const genusOverlayIds=new Set();
 const genusOverlayById=new Map();
@@ -1907,22 +1905,7 @@ function detailShapeFromCell(cell,t,coverage=DETAIL_LAND_FRACTION){
 }
 
 
-/* v53: SINGLE species renderer. Species geometry is always this fixed compact polygon; no cell-sized species path exists.
-   v52: fixed compact species geometry retained from v51. This deliberately ignores allocation
-   cell area/aspect ratio. All species therefore have exactly the same polygon
-   area (up to floating point precision) and cannot inflate in species-poor
-   genera. */
-function fixedSpeciesShape(cell,t){
-  if(!cell||cell.length<3)return cell;
-  const c=polygonCentroid(cell);
-  const phase=6.283185307179586*h2(t.id,27151);
-  const out=[];
-  for(let i=0;i<SPECIES_VERTICES;i++){
-    const a=phase+6.283185307179586*i/SPECIES_VERTICES;
-    out.push({x:c.x+SPECIES_RADIUS*Math.cos(a),y:c.y+SPECIES_RADIUS*Math.sin(a)});
-  }
-  return out;
-}
+/* v54: species use detailShapeFromCell() exactly like FAMILY and GENUS. */
 
 function addLazyTaxon(raw){
   if(!raw||raw.id==null)return byId.get(String(raw?.id));
@@ -1951,11 +1934,10 @@ function layoutLazyChildren(parent){
     .filter(c=>['FAMILY','GENUS','SPECIES'].includes(detailRank(c)));
   if(!cs.length)return;
 
-  /* Partition ONLY the already-established parent polygon. detailWeight() makes
-     FAMILY/GENUS proportional to descendant species count and SPECIES equal.
-     FAMILY and GENUS shrink to 70% of their allocation. SPECIES keep equal
-     allocation cells but render as compact equal-area islands, preserving the
-     visible genus context. */
+  /* v54: one recursive rule at every taxonomic level. detailWeight() makes
+     FAMILY/GENUS proportional to descendant species count and every SPECIES
+     exactly weight 1. Every child then uses 70% of its allocation cell, so
+     genus -> species behaves identically to order -> family and family -> genus. */
   const cells=detailPartition(parent.poly,cs,String(parent.id),0,new Map());
   for(const c of cs){
     const cell=cells.get(String(c.id));
@@ -1963,9 +1945,7 @@ function layoutLazyChildren(parent){
 
     c.cellPoly=cell;
     const childRank=detailRank(c);
-    c.poly=childRank==='SPECIES'
-      ? fixedSpeciesShape(cell,c)
-      : detailShapeFromCell(cell,c,DETAIL_LAND_FRACTION);
+    c.poly=detailShapeFromCell(cell,c,DETAIL_LAND_FRACTION);
     c.box=polyBBox(c.poly);
     c.center=polygonCentroid(c.poly);
     c.area=absArea(c.poly);
@@ -2470,9 +2450,9 @@ function anim(ts){
   const landPct=Math.max(0,Math.min(100,100*(payload.meta.worldLandFraction||0)));
   const openPct=100-landPct;
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
-  status.textContent=`v53 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
+  status.textContent=`v54 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v53 · single fixed species layer',payload.meta.worldLandFraction);
+console.log('Atlas v54 · recursive species allocation' ,payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
