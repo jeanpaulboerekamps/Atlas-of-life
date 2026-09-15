@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — v55 compacte gelijke soorten</title>
+<title>Atlas of Life — v56 soorten zonder witte tekstlaag</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -86,7 +86,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v55 · compacte gelijke soorten · 30% open</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v56 · soorten zonder witte tekstlaag · 30% open</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1640,6 +1640,7 @@ function renderTaxon(t){
   label.setAttribute('y',t.center.y);
   label.setAttribute('text-anchor','middle');
   label.setAttribute('class','label');
+  if(detailRank(t)==='SPECIES')label.style.display='none';
   label.textContent=t.vernacularName||t.canonicalName;
   label.dataset.minz=(minZoom(t)*1.02);
   label.dataset.id=sid;
@@ -2330,7 +2331,11 @@ function semantic(z,force=false){
     const genusContext=rr==='GENUS'&&generaWithVisibleSpecies.has(String(o.t.id));
     const minW=rr==='SPECIES'?18:(rr==='GENUS'?72:62);
     const minH=rr==='SPECIES'?18:(rr==='GENUS'?30:26);
-    const labelVisible=visible&&(
+    /* v56: species geometry is already the visual species layer. Do not add a
+       second text layer over it; that was perceived as large white species
+       objects because .label uses a white paint-order stroke. Higher-rank
+       labels keep the proven semantic behaviour unchanged. */
+    const labelVisible=rr!=='SPECIES'&&visible&&(
       genusContext ||
       (z>=+o.text.dataset.minz&&screenW>minW&&screenH>minH)
     );
