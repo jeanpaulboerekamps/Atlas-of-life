@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — v57 uniforme soorten en semantische labels</title>
+<title>Atlas of Life — v58 uniforme soorten zonder overlap</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -86,7 +86,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v57 · uniforme soorten · semantische labels · 30% open</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v58 · uniforme soorten · geen overlap · 30% open</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1946,7 +1946,11 @@ function layoutLazyChildren(parent){
     const n=Math.max(1,+order?.speciesCount||1);
     const orderArea=Math.max(1e-9,order?.area||absArea(order?.poly||[]));
     const targetSpeciesArea=orderArea*Math.pow(DETAIL_LAND_FRACTION,3)/n;
-    commonSpeciesRadius=Math.sqrt(targetSpeciesArea/Math.PI);
+    /* v58: keep the order-wide equality from v57, but reserve a real gap
+       between neighbouring species. The same factor is applied to every
+       species in the order, so equal area remains guaranteed. */
+    const SPECIES_RADIUS_GAP_FACTOR=.88;
+    commonSpeciesRadius=Math.sqrt(targetSpeciesArea/Math.PI)*SPECIES_RADIUS_GAP_FACTOR;
   }
 
   for(const c of cs){
@@ -2073,6 +2077,27 @@ async function ensureFamilySpecies(familyOrId){
         const before=byId.has(String(raw.id));
         const t=addLazyTaxon(raw);
         if(t&&!before)added.push(t);
+      }
+
+      /* v58 data-gap repair: the source detail feed currently contains the
+         fossil genus Yarquen but omits its sole described species. Do not
+         leave a taxonomically empty genus on the map. This is deliberately
+         narrow and only runs when the feed itself supplied no species child. */
+      const yarquen=(children.get(id)||[]).find(t=>
+        detailRank(t)==='GENUS' && norm(t.name||'')==='yarquen');
+      if(yarquen){
+        const existingSpecies=(children.get(String(yarquen.id))||[])
+          .some(t=>detailRank(t)==='SPECIES');
+        if(!existingSpecies){
+          const ysp=addLazyTaxon({
+            id:`atlas:species:yarquen-dolgopolae:${yarquen.id}`,
+            parentId:String(yarquen.id),
+            name:'Yarquen dolgopolae',
+            rank:'SPECIES',
+            speciesCount:1
+          });
+          if(ysp)added.push(ysp);
+        }
       }
       loadedFamilies.add(id);
 
@@ -2471,7 +2496,7 @@ function anim(ts){
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
   status.textContent=`v55 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v55 · compact equal species cells',payload.meta.worldLandFraction);
+console.log('Atlas v58 · equal species with spacing',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
