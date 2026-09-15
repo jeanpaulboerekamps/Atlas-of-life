@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — v61 vrije soorten · complete genera · snelle layout</title>
+<title>Atlas of Life — v62 compacte genera · complete genera · snelle layout</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -86,7 +86,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v61 · vrije soorten · complete genera · snelle layout · 30% open</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v62 · compacte genera · complete genera · snelle layout · 30% open</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1912,6 +1912,69 @@ function detailShapeFromCell(cell,t,coverage=DETAIL_LAND_FRACTION){
   return cleanPoly(best);
 }
 
+/* v62: genus allocation cells can inherit long points from recursive cuts.
+   Round only the visible genus land, cap remote vertices and limit its aspect
+   ratio. The allocation cell itself remains untouched, so weights and the
+   family partition stay exact. */
+function detailCompactGenusShape(cell,t,coverage=DETAIL_LAND_FRACTION){
+  if(!cell||cell.length<3)return cell;
+  const centre=polygonCentroid(cell),target=absArea(cell)*coverage;
+
+  let shaped=cell.map(p=>({x:p.x,y:p.y}));
+  const radii=shaped.map(p=>Math.hypot(p.x-centre.x,p.y-centre.y)).sort((a,b)=>a-b);
+  const median=radii[Math.floor(radii.length/2)]||1;
+  const maxRadius=median*1.62;
+  shaped=shaped.map(p=>{
+    const dx=p.x-centre.x,dy=p.y-centre.y,d=Math.hypot(dx,dy)||1;
+    const f=Math.min(1,maxRadius/d);
+    return{x:centre.x+dx*f,y:centre.y+dy*f};
+  });
+
+  /* Two gentle corner-cutting passes remove acute tips while retaining an
+     organic, non-elliptical silhouette. For convex allocation cells these
+     points remain inside the cell. */
+  for(let pass=0;pass<2;pass++){
+    const rounded=[];
+    for(let i=0;i<shaped.length;i++){
+      const a=shaped[i],b=shaped[(i+1)%shaped.length];
+      rounded.push({x:a.x*.72+b.x*.28,y:a.y*.72+b.y*.28});
+      rounded.push({x:a.x*.28+b.x*.72,y:a.y*.28+b.y*.72});
+    }
+    shaped=rounded;
+  }
+
+  /* Contract only the long axis. A 1.75 cap still allows lively variation,
+     but prevents a genus from becoming a needle or a giant triangular arm. */
+  let box=polyBBox(shaped);
+  if(box.w>box.h*1.75){
+    const f=box.h*1.75/box.w;
+    shaped=shaped.map(p=>({x:centre.x+(p.x-centre.x)*f,y:p.y}));
+  }else if(box.h>box.w*1.75){
+    const f=box.w*1.75/box.h;
+    shaped=shaped.map(p=>({x:p.x,y:centre.y+(p.y-centre.y)*f}));
+  }
+
+  const fits=q=>q.every((p,i)=>pointInPoly(p,cell)&&pointInPoly({
+    x:(p.x+q[(i+1)%q.length].x)/2,
+    y:(p.y+q[(i+1)%q.length].y)/2
+  },cell));
+  const scaled=s=>shaped.map(p=>({
+    x:centre.x+(p.x-centre.x)*s,
+    y:centre.y+(p.y-centre.y)*s
+  }));
+
+  /* Recover as much of the normal 70% land budget as the compact silhouette
+     can safely occupy without crossing its allocation cell. */
+  const wanted=Math.sqrt(target/Math.max(1e-9,absArea(shaped)));
+  let lo=.05,hi=Math.max(1,wanted*1.08),best=scaled(.05);
+  for(let k=0;k<30;k++){
+    const m=(lo+hi)/2,q=scaled(m);
+    if(fits(q)){best=q;lo=m}else hi=m;
+  }
+  if(absArea(best)>target)best=scaled(lo*Math.sqrt(target/absArea(best)));
+  return cleanPoly(best);
+}
+
 
 /* v55: species use compact equal-radius geometry inside equal-weight allocation cells. */
 
@@ -2008,7 +2071,9 @@ function layoutLazyChildren(parent){
       }
       c.poly=cleanPoly(pts);
     }else{
-      c.poly=detailShapeFromCell(cell,c,DETAIL_LAND_FRACTION);
+      c.poly=childRank==='GENUS'
+        ? detailCompactGenusShape(cell,c,DETAIL_LAND_FRACTION)
+        : detailShapeFromCell(cell,c,DETAIL_LAND_FRACTION);
     }
     c.box=polyBBox(c.poly);
     c.center=polygonCentroid(c.poly);
