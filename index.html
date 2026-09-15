@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — v58 uniforme soorten zonder overlap</title>
+<title>Atlas of Life — v59 vrije soorten · complete genera · tweeregelige namen</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -86,7 +86,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v58 · uniforme soorten · geen overlap · 30% open</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v59 · vrije soorten · complete genera · namen op 2 regels · 30% open</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1640,7 +1640,17 @@ function renderTaxon(t){
   label.setAttribute('y',t.center.y);
   label.setAttribute('text-anchor','middle');
   label.setAttribute('class','label');
-  label.textContent=t.vernacularName||t.canonicalName;
+  const labelName=t.vernacularName||t.canonicalName||t.name||'';
+  if(detailRank(t)==='SPECIES'){
+    const parts=String(labelName).trim().split(/\s+/);
+    if(parts.length>=2){
+      const a=document.createElementNS(NS,'tspan');
+      a.setAttribute('x',t.center.x); a.setAttribute('dy','-0.12em'); a.textContent=parts[0];
+      const b=document.createElementNS(NS,'tspan');
+      b.setAttribute('x',t.center.x); b.setAttribute('dy','1.08em'); b.textContent=parts.slice(1).join(' ');
+      label.appendChild(a); label.appendChild(b);
+    }else label.textContent=labelName;
+  }else label.textContent=labelName;
   label.dataset.minz=(detailRank(t)==='SPECIES'?Math.max(18,minZoom(t)*1.6):(minZoom(t)*1.02));
   label.dataset.id=sid;
   lg.appendChild(label);
@@ -1928,8 +1938,15 @@ function addLazyTaxon(raw){
 
 function layoutLazyChildren(parent){
   if(!parent?.poly)return;
-  const cs=(children.get(String(parent.id))||[])
+  let cs=(children.get(String(parent.id))||[])
     .filter(c=>['FAMILY','GENUS','SPECIES'].includes(detailRank(c)));
+  /* v59: once a family species shard is loaded, do not allocate/render a
+     genus for which that shard contains no species. This prevents empty genus
+     boxes caused by incomplete/mismatched detail rows. */
+  if(detailRank(parent)==='FAMILY' && loadedFamilies.has(String(parent.id))){
+    cs=cs.filter(c=>detailRank(c)!=='GENUS' ||
+      (children.get(String(c.id))||[]).some(x=>detailRank(x)==='SPECIES'));
+  }
   if(!cs.length)return;
 
   /* v57: FAMILY and GENUS keep the proven weighted recursive partition.
@@ -1953,6 +1970,24 @@ function layoutLazyChildren(parent){
     commonSpeciesRadius=Math.sqrt(targetSpeciesArea/Math.PI)*SPECIES_RADIUS_GAP_FACTOR;
   }
 
+  /* v59: equal species keep exactly the same radius, but their centres are no
+     longer frozen at recursive cell centroids. Relax them as equal circles
+     inside the definitive genus polygon. This removes accidental overlap
+     without changing species area. */
+  let relaxedSpecies=null;
+  if(speciesLevel && commonSpeciesRadius){
+    const ctr=polygonCentroid(parent.poly);
+    relaxedSpecies=cs.map(c=>{
+      const cell=cells.get(String(c.id));
+      const q=cell&&cell.length>=3?polygonCentroid(cell):ctr;
+      return {t:c,x:q.x,y:q.y,rx:commonSpeciesRadius,ry:commonSpeciesRadius,bound:commonSpeciesRadius};
+    });
+    for(let round=0;round<80;round++){
+      for(const q of relaxedSpecies)nudgeInside(parent.poly,q,ctr);
+      resolveCollisions(relaxedSpecies,parent.poly,ctr);
+    }
+  }
+
   for(const c of cs){
     const cell=cells.get(String(c.id));
     if(!cell||cell.length<3)continue;
@@ -1960,7 +1995,8 @@ function layoutLazyChildren(parent){
     c.cellPoly=cell;
     const childRank=detailRank(c);
     if(speciesLevel&&childRank==='SPECIES'){
-      const ctr=polygonCentroid(cell),r=commonSpeciesRadius||0;
+      const packed=relaxedSpecies?.find(q=>String(q.t.id)===String(c.id));
+      const ctr=packed?{x:packed.x,y:packed.y}:polygonCentroid(cell),r=commonSpeciesRadius||0;
       const pts=[];
       for(let j=0;j<28;j++){
         const a=2*Math.PI*j/28;
@@ -2079,7 +2115,26 @@ async function ensureFamilySpecies(familyOrId){
         if(t&&!before)added.push(t);
       }
 
-      /* v58 data-gap repair: the source detail feed currently contains the
+      /* v59 generic parent repair. Some detail rows can carry a stale/missing
+         genus parent id. A binomial species name already states its genus, so
+         reconnect such rows to the matching genus in this family. */
+      const familyGenera=(children.get(id)||[]).filter(t=>detailRank(t)==='GENUS');
+      const genusByName=new Map(familyGenera.map(g=>[norm(g.name||g.canonicalName||''),g]));
+      for(const sp of added.filter(t=>detailRank(t)==='SPECIES')){
+        const bin=String(sp.name||sp.canonicalName||'').trim().split(/\s+/);
+        const g=genusByName.get(norm(bin[0]||''));
+        if(!g)continue;
+        const oldPid=String(sp.parentId);
+        if(oldPid!==String(g.id)){
+          const oldKids=children.get(oldPid)||[];
+          const ix=oldKids.indexOf(sp); if(ix>=0)oldKids.splice(ix,1);
+          sp.parentId=String(g.id);
+          if(!children.has(String(g.id)))children.set(String(g.id),[]);
+          if(!children.get(String(g.id)).includes(sp))children.get(String(g.id)).push(sp);
+        }
+      }
+
+      /* v59 retained narrow data-gap repair: the source detail feed currently contains the
          fossil genus Yarquen but omits its sole described species. Do not
          leave a taxonomically empty genus on the map. This is deliberately
          narrow and only runs when the feed itself supplied no species child. */
@@ -2496,7 +2551,7 @@ function anim(ts){
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
   status.textContent=`v55 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v58 · equal species with spacing',payload.meta.worldLandFraction);
+console.log('Atlas v59 · relaxed equal species + repaired genera + binomial labels',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
