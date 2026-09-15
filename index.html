@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — v59 vrije soorten · complete genera · tweeregelige namen</title>
+<title>Atlas of Life — v60 vrije soorten · complete genera · snelle start</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -86,7 +86,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v59 · vrije soorten · complete genera · namen op 2 regels · 30% open</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v60 · vrije soorten · complete genera · snelle start · 30% open</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -103,7 +103,9 @@ const hg=document.getElementById('halos'), rg=document.getElementById('regions')
 const status=document.getElementById('status'), zoomEl=document.getElementById('zoom');
 const levelEl=document.getElementById('level'), crumbs=document.getElementById('crumbs');
 
-const payload=await fetch('data/taxa.json',{cache:'no-store'}).then(r=>r.json());
+const payload=await fetch('data/taxa.json',{cache:'force-cache'}).then(r=>r.json());
+/* v60: yield one frame before geometry construction so Safari paints the UI immediately. */
+await new Promise(resolve=>requestAnimationFrame(()=>resolve()));
 const taxa=payload.taxa;
 const byId=new Map(taxa.map(t=>[String(t.id),t]));
 
@@ -311,13 +313,13 @@ function ellipseFits(poly,x,y,rx,ry){
   return true;
 }
 function nudgeInside(poly,item,center){
+  /* v60: never shrink rx/ry here. v59 shrank only the collision model while
+     the final species circle kept commonSpeciesRadius; the solver therefore
+     believed circles fitted although the rendered circles still overlapped. */
   let tries=0;
-  while(tries++<38&&!ellipseFits(poly,item.x,item.y,item.rx,item.ry)){
-    item.x=item.x*.91+center.x*.09;
-    item.y=item.y*.91+center.y*.09;
-    if(tries%6===0){
-      item.rx*=.95;item.ry*=.95;item.bound=Math.max(item.rx,item.ry);
-    }
+  while(tries++<80&&!ellipseFits(poly,item.x,item.y,item.rx,item.ry)){
+    item.x=item.x*.94+center.x*.06;
+    item.y=item.y*.94+center.y*.06;
   }
 }
 
@@ -337,7 +339,9 @@ function resolveCollisions(items,parentPoly,parentCenter){
   for(let pass=0;pass<230;pass++){
     for(let i=0;i<items.length;i++){
       const a=items[i];
-      let fx=(parentCenter.x-a.x)*.0012,fy=(parentCenter.y-a.y)*.0012;
+      /* v60: almost no centre gravity: use the full genus polygon instead of
+         pulling all equal species into a central cluster. */
+      let fx=(parentCenter.x-a.x)*.00008,fy=(parentCenter.y-a.y)*.00008;
       for(let j=0;j<items.length;j++)if(i!==j){
         const b=items[j],dx=a.x-b.x,dy=a.y-b.y;
         const d=Math.hypot(dx,dy)||.001;
@@ -1563,6 +1567,23 @@ const renderedById=new Map();
 const deferredSpeciesByGenus=new Map();
 const deferredSpeciesIds=new Set();
 
+function setTaxonLabel(label,t){
+  while(label.firstChild)label.removeChild(label.firstChild);
+  const labelName=t.vernacularName||t.canonicalName||t.name||'';
+  if(detailRank(t)==='SPECIES'){
+    const parts=String(labelName).trim().split(/\s+/);
+    if(parts.length>=2){
+      const a=document.createElementNS(NS,'tspan');
+      a.setAttribute('x',t.center.x); a.setAttribute('dy','-0.12em'); a.textContent=parts[0];
+      const b=document.createElementNS(NS,'tspan');
+      b.setAttribute('x',t.center.x); b.setAttribute('dy','1.08em'); b.textContent=parts.slice(1).join(' ');
+      label.appendChild(a); label.appendChild(b);
+      return;
+    }
+  }
+  label.textContent=labelName;
+}
+
 function renderTaxon(t){
   if(!t||t.id==='__life'||!t.poly||t.poly.length<3)return;
   const sid=String(t.id);
@@ -1582,7 +1603,7 @@ function renderTaxon(t){
     existing.p.setAttribute('fill',detailRank(t)==='SPECIES'?'#f39a38':fillFor(t));
     existing.text.setAttribute('x',t.center.x);
     existing.text.setAttribute('y',t.center.y);
-    existing.text.textContent=t.vernacularName||t.canonicalName;
+    setTaxonLabel(existing.text,t);
     if(detailRank(t)==='GENUS')updateGenusBoundary(t);
     return existing;
   }
@@ -1640,17 +1661,7 @@ function renderTaxon(t){
   label.setAttribute('y',t.center.y);
   label.setAttribute('text-anchor','middle');
   label.setAttribute('class','label');
-  const labelName=t.vernacularName||t.canonicalName||t.name||'';
-  if(detailRank(t)==='SPECIES'){
-    const parts=String(labelName).trim().split(/\s+/);
-    if(parts.length>=2){
-      const a=document.createElementNS(NS,'tspan');
-      a.setAttribute('x',t.center.x); a.setAttribute('dy','-0.12em'); a.textContent=parts[0];
-      const b=document.createElementNS(NS,'tspan');
-      b.setAttribute('x',t.center.x); b.setAttribute('dy','1.08em'); b.textContent=parts.slice(1).join(' ');
-      label.appendChild(a); label.appendChild(b);
-    }else label.textContent=labelName;
-  }else label.textContent=labelName;
+  setTaxonLabel(label,t);
   label.dataset.minz=(detailRank(t)==='SPECIES'?Math.max(18,minZoom(t)*1.6):(minZoom(t)*1.02));
   label.dataset.id=sid;
   lg.appendChild(label);
@@ -1966,7 +1977,7 @@ function layoutLazyChildren(parent){
     /* v58: keep the order-wide equality from v57, but reserve a real gap
        between neighbouring species. The same factor is applied to every
        species in the order, so equal area remains guaranteed. */
-    const SPECIES_RADIUS_GAP_FACTOR=.88;
+    const SPECIES_RADIUS_GAP_FACTOR=.78;
     commonSpeciesRadius=Math.sqrt(targetSpeciesArea/Math.PI)*SPECIES_RADIUS_GAP_FACTOR;
   }
 
@@ -1982,7 +1993,7 @@ function layoutLazyChildren(parent){
       const q=cell&&cell.length>=3?polygonCentroid(cell):ctr;
       return {t:c,x:q.x,y:q.y,rx:commonSpeciesRadius,ry:commonSpeciesRadius,bound:commonSpeciesRadius};
     });
-    for(let round=0;round<80;round++){
+    for(let round=0;round<140;round++){
       for(const q of relaxedSpecies)nudgeInside(parent.poly,q,ctr);
       resolveCollisions(relaxedSpecies,parent.poly,ctr);
     }
@@ -2134,25 +2145,24 @@ async function ensureFamilySpecies(familyOrId){
         }
       }
 
-      /* v59 retained narrow data-gap repair: the source detail feed currently contains the
-         fossil genus Yarquen but omits its sole described species. Do not
-         leave a taxonomically empty genus on the map. This is deliberately
-         narrow and only runs when the feed itself supplied no species child. */
-      const yarquen=(children.get(id)||[]).find(t=>
-        detailRank(t)==='GENUS' && norm(t.name||'')==='yarquen');
-      if(yarquen){
-        const existingSpecies=(children.get(String(yarquen.id))||[])
+      /* v60: a genus may never be empty on the map. If the family shard has
+         no species row for a genus, add one explicit unknown species. This is
+         generic (not Yarquen-specific) and preserves the genus in the layout. */
+      for(const g of familyGenera){
+        const hasSpecies=(children.get(String(g.id))||[])
           .some(t=>detailRank(t)==='SPECIES');
-        if(!existingSpecies){
-          const ysp=addLazyTaxon({
-            id:`atlas:species:yarquen-dolgopolae:${yarquen.id}`,
-            parentId:String(yarquen.id),
-            name:'Yarquen dolgopolae',
-            rank:'SPECIES',
-            speciesCount:1
-          });
-          if(ysp)added.push(ysp);
-        }
+        if(hasSpecies)continue;
+        const genusName=String(g.name||g.canonicalName||'Onbekend').trim();
+        const sp=addLazyTaxon({
+          id:`atlas:species:unknown:${g.id}`,
+          parentId:String(g.id),
+          name:`${genusName} ?`,
+          canonicalName:`${genusName} ?`,
+          rank:'SPECIES',
+          speciesCount:1,
+          placeholder:true
+        });
+        if(sp)added.push(sp);
       }
       loadedFamilies.add(id);
 
@@ -2549,9 +2559,9 @@ function anim(ts){
   const landPct=Math.max(0,Math.min(100,100*(payload.meta.worldLandFraction||0)));
   const openPct=100-landPct;
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
-  status.textContent=`v55 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
+  status.textContent=`v60 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v59 · relaxed equal species + repaired genera + binomial labels',payload.meta.worldLandFraction);
+console.log('Atlas v60 · collision-safe equal species + generic unknown species + faster first paint',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
