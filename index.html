@@ -85,7 +85,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v45 · 30% open · gelijke soorten</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v46 · vaste soorten · 30% open</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1752,10 +1752,13 @@ function detailWeight(t){
   return Math.max(.0001,+t.weight||+t.mapWeight||1);
 }
 
-/* v44: every lower-level partition deliberately leaves 30% open space.
-   Species always have weight 1, so their target areas are exactly equal
-   inside a genus. */
+/* v46: FAMILY and GENUS still use descendant species counts for allocation.
+   SPECIES no longer expand to fill the genus. Every species gets the same
+   absolute map area. Its private slot is larger by 1/0.70, leaving 30%
+   breathing room around the fixed species island. */
 const DETAIL_LAND_FRACTION=.70;
+const FIXED_SPECIES_LAND_AREA=.80;
+const FIXED_SPECIES_SLOT_AREA=FIXED_SPECIES_LAND_AREA/DETAIL_LAND_FRACTION;
 const generaWithVisibleSpecies=new Set();
 const genusOverlayIds=new Set();
 const genusOverlayById=new Map();
@@ -1918,18 +1921,31 @@ function layoutLazyChildren(parent){
   for(const c of cs){
     const cell=cells.get(String(c.id));
     if(!cell||cell.length<3)continue;
-    c.cellPoly=cell;
-    c.poly=detailShapeFromCell(cell,c,DETAIL_LAND_FRACTION);
-    c.box=polyBBox(c.poly);
-    c.center=polygonCentroid(c.poly);
-    c.area=absArea(c.poly);
-
     if(detailRank(c)==='SPECIES'){
+      /* v46 FIX: the partition cell is only a placement envelope. It must NOT
+         determine species size. Scale a private slot about its centroid to one
+         absolute area, then use 70% of that slot for the visible species.
+         Because every private slot is a scaled subset of a disjoint partition
+         cell, species cannot overlap; because the slot area is constant, every
+         visible species has the same absolute area everywhere in the atlas. */
+      const rawCellArea=Math.max(1e-9,absArea(cell));
+      const cc=polygonCentroid(cell);
+      const slotScale=Math.min(1,Math.sqrt(FIXED_SPECIES_SLOT_AREA/rawCellArea));
+      const slot=cleanPoly(cell.map(p=>({
+        x:cc.x+(p.x-cc.x)*slotScale,
+        y:cc.y+(p.y-cc.y)*slotScale
+      })));
+      c.cellPoly=slot;
+      c.poly=detailShapeFromCell(slot,c,DETAIL_LAND_FRACTION);
+      c.box=polyBBox(c.poly);
+      c.center=polygonCentroid(c.poly);
+      c.area=absArea(c.poly);
+
       const gid=String(c.parentId);
-      /* Equal-weight partition + fixed 70% inset = equal visible species area.
-         Keep both cell and visible target areas for runtime diagnostics. */
-      c.equalSpeciesCellArea=absArea(cell);
+      c.equalSpeciesCellArea=absArea(slot);
       c.equalSpeciesArea=c.area;
+      c.fixedSpeciesTargetArea=FIXED_SPECIES_LAND_AREA;
+      c.fixedSpeciesClipped=rawCellArea+1e-7<FIXED_SPECIES_SLOT_AREA;
       if(!deferredSpeciesByGenus.has(gid))deferredSpeciesByGenus.set(gid,[]);
       if(!deferredSpeciesIds.has(String(c.id))){
         deferredSpeciesIds.add(String(c.id));
@@ -1937,6 +1953,11 @@ function layoutLazyChildren(parent){
       }
       ensureGenusBoundary(parent);
     }else{
+      c.cellPoly=cell;
+      c.poly=detailShapeFromCell(cell,c,DETAIL_LAND_FRACTION);
+      c.box=polyBBox(c.poly);
+      c.center=polygonCentroid(c.poly);
+      c.area=absArea(c.poly);
       renderTaxon(c);
       layoutLazyChildren(c);
     }
