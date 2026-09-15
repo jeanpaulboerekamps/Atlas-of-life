@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — blijvende geometrische kustlijnen v45</title>
+<title>Atlas of Life — v51 vaste compacte soorten</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -85,7 +85,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v50 · compacte soorten · hiërarchisch</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v51 · vaste compacte soorten · hiërarchisch</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1757,10 +1757,12 @@ function detailWeight(t){
    NO absolute world-area species constant: every level is allocated inside its
    existing parent polygon, preserving the established ORDER geometry. */
 const DETAIL_LAND_FRACTION=.70;
-/* v50: family/genus keep the 70% hierarchical land allocation. Species are
-   visualised as compact, equal-area islands inside their equal allocation
-   cells, so the genus remains readable instead of being covered by white. */
-const SPECIES_VISUAL_FRACTION=.16;
+/* v51: FAMILY/GENUS retain the 70% hierarchical land allocation.
+   SPECIES are no longer scaled copies of treemap cells. Every species is a
+   compact equal-area symbol with a fixed world-space radius. The partition
+   cell is used only to choose its position, never its size or shape. */
+const SPECIES_RADIUS=.12;
+const SPECIES_VERTICES=14;
 const generaWithVisibleSpecies=new Set();
 const genusOverlayIds=new Set();
 const genusOverlayById=new Map();
@@ -1892,6 +1894,23 @@ function detailShapeFromCell(cell,t,coverage=DETAIL_LAND_FRACTION){
   return cleanPoly(best);
 }
 
+
+/* v51: fixed compact species geometry. This deliberately ignores allocation
+   cell area/aspect ratio. All species therefore have exactly the same polygon
+   area (up to floating point precision) and cannot inflate in species-poor
+   genera. */
+function fixedSpeciesShape(cell,t){
+  if(!cell||cell.length<3)return cell;
+  const c=polygonCentroid(cell);
+  const phase=6.283185307179586*h2(t.id,27151);
+  const out=[];
+  for(let i=0;i<SPECIES_VERTICES;i++){
+    const a=phase+6.283185307179586*i/SPECIES_VERTICES;
+    out.push({x:c.x+SPECIES_RADIUS*Math.cos(a),y:c.y+SPECIES_RADIUS*Math.sin(a)});
+  }
+  return out;
+}
+
 function addLazyTaxon(raw){
   if(!raw||raw.id==null)return byId.get(String(raw?.id));
   const id=String(raw.id);
@@ -1931,13 +1950,14 @@ function layoutLazyChildren(parent){
 
     c.cellPoly=cell;
     const childRank=detailRank(c);
-    const visualFraction=childRank==='SPECIES' ? SPECIES_VISUAL_FRACTION : DETAIL_LAND_FRACTION;
-    c.poly=detailShapeFromCell(cell,c,visualFraction);
+    c.poly=childRank==='SPECIES'
+      ? fixedSpeciesShape(cell,c)
+      : detailShapeFromCell(cell,c,DETAIL_LAND_FRACTION);
     c.box=polyBBox(c.poly);
     c.center=polygonCentroid(c.poly);
     c.area=absArea(c.poly);
 
-    if(detailRank(c)==='SPECIES'){
+    if(childRank==='SPECIES'){
       const gid=String(c.parentId);
       c.equalSpeciesCellArea=absArea(cell);
       c.equalSpeciesArea=c.area;
@@ -2437,7 +2457,7 @@ function anim(ts){
   const landPct=Math.max(0,Math.min(100,100*(payload.meta.worldLandFraction||0)));
   const openPct=100-landPct;
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
-  status.textContent=`v45 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
+  status.textContent=`v51 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
 console.log('Atlas v49 · hierarchical species-count detail within fixed ORDER geometry',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
