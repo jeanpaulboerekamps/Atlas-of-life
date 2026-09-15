@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — blijvende geometrische kustlijnen v45</title>
+<title>Atlas of Life — v48</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -85,7 +85,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v47 · soort → genus → familie · 30% open</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v48 · vaste kleine soorten · 30% open</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1757,11 +1757,12 @@ function detailWeight(t){
    absolute map area. Its private slot is larger by 1/0.70, leaving 30%
    breathing room around the fixed species island. */
 const DETAIL_LAND_FRACTION=.70;
-/* v47: one species is a genuinely absolute map unit.  At 100× this is
-   deliberately a small island (~16 px equivalent diameter), rather than a
-   genus-filling balloon.  Higher detail ranks are derived bottom-up from this
-   unit: n species -> n slots of identical size. */
-const FIXED_SPECIES_LAND_AREA=.060;
+/* v48: fixed species area corrected by two orders of magnitude.
+   v47 used .060 square world-units, which still rendered as visually dominant
+   islands at deep zoom.  Every species now uses .00060 square world-units,
+   independent of observations, genus size and zoom.  Genus/family targets
+   remain derived bottom-up from the number of descendant species. */
+const FIXED_SPECIES_LAND_AREA=.00060;
 const FIXED_SPECIES_SLOT_AREA=FIXED_SPECIES_LAND_AREA/DETAIL_LAND_FRACTION;
 function speciesDrivenTargetArea(t){
   const r=detailRank(t),n=Math.max(1,+t.speciesCount||1);
@@ -1942,7 +1943,7 @@ function layoutLazyChildren(parent){
     const cell=cells.get(String(c.id));
     if(!cell||cell.length<3)continue;
     if(detailRank(c)==='SPECIES'){
-      /* v47: the partition only supplies a non-overlapping POSITION.  The
+      /* v48: the partition only supplies a non-overlapping POSITION.  The
          species slot itself has one global absolute area, independent of the
          genus polygon, family polygon, observations, or zoom. */
       const rawCellArea=Math.max(1e-9,absArea(cell));
@@ -1965,7 +1966,7 @@ function layoutLazyChildren(parent){
       }
       ensureGenusBoundary(parent);
     }else{
-      /* v47 bottom-up hierarchy.  FAMILY and GENUS no longer expand to consume
+      /* v48 bottom-up hierarchy.  FAMILY and GENUS no longer expand to consume
          the complete parent partition.  Their absolute target area is derived
          from descendant species, while detailPartition still determines their
          relative position and guarantees disjoint envelopes. */
