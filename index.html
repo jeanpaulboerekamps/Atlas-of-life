@@ -85,7 +85,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v49 · hiërarchisch · 30% open</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v50 · compacte soorten · hiërarchisch</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1757,6 +1757,10 @@ function detailWeight(t){
    NO absolute world-area species constant: every level is allocated inside its
    existing parent polygon, preserving the established ORDER geometry. */
 const DETAIL_LAND_FRACTION=.70;
+/* v50: family/genus keep the 70% hierarchical land allocation. Species are
+   visualised as compact, equal-area islands inside their equal allocation
+   cells, so the genus remains readable instead of being covered by white. */
+const SPECIES_VISUAL_FRACTION=.16;
 const generaWithVisibleSpecies=new Set();
 const genusOverlayIds=new Set();
 const genusOverlayById=new Map();
@@ -1860,7 +1864,7 @@ function detailPartition(poly,items,seed,depth=0,out=new Map()){
   return out;
 }
 
-/* Keep exactly ~30% breathing room on FAMILY/GENUS/SPECIES levels. */
+/* Shape a child inside its allocation cell at the requested visual coverage. */
 function detailShapeFromCell(cell,t,coverage=DETAIL_LAND_FRACTION){
   if(!cell||cell.length<3)return cell;
   const c=polygonCentroid(cell);
@@ -1917,14 +1921,18 @@ function layoutLazyChildren(parent){
 
   /* Partition ONLY the already-established parent polygon. detailWeight() makes
      FAMILY/GENUS proportional to descendant species count and SPECIES equal.
-     Shrinking every partition to 70% leaves 30% open space at this level. */
+     FAMILY and GENUS shrink to 70% of their allocation. SPECIES keep equal
+     allocation cells but render as compact equal-area islands, preserving the
+     visible genus context. */
   const cells=detailPartition(parent.poly,cs,String(parent.id),0,new Map());
   for(const c of cs){
     const cell=cells.get(String(c.id));
     if(!cell||cell.length<3)continue;
 
     c.cellPoly=cell;
-    c.poly=detailShapeFromCell(cell,c,DETAIL_LAND_FRACTION);
+    const childRank=detailRank(c);
+    const visualFraction=childRank==='SPECIES' ? SPECIES_VISUAL_FRACTION : DETAIL_LAND_FRACTION;
+    c.poly=detailShapeFromCell(cell,c,visualFraction);
     c.box=polyBBox(c.poly);
     c.center=polygonCentroid(c.poly);
     c.area=absArea(c.poly);
