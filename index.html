@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — v54 recursieve soorten</title>
+<title>Atlas of Life — v55 compacte gelijke soorten</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -86,7 +86,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v54 · recursief · 30% open op elk niveau</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v55 · compacte gelijke soorten · 30% open</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1766,10 +1766,8 @@ function detailWeight(t){
    NO absolute world-area species constant: every level is allocated inside its
    existing parent polygon, preserving the established ORDER geometry. */
 const DETAIL_LAND_FRACTION=.70;
-/* v54: the exact same recursive allocation rule is used for FAMILY, GENUS
-   and SPECIES. Every species has weight 1. Every child occupies 70% of its
-   allocation cell, leaving 30% open space at that level. There is no fixed
-   species radius and no alternate species geometry. */
+/* v55: higher levels keep the recursive 70/30 allocation. Species retain weight 1,
+   then receive equal compact geometry inside their allocation cells. */
 const SPECIES_MATERIALISE_Z=6.0;
 const SPECIES_FOCUS_Z=220;
 const MAX_MANUAL_Z=800;
@@ -1905,7 +1903,7 @@ function detailShapeFromCell(cell,t,coverage=DETAIL_LAND_FRACTION){
 }
 
 
-/* v54: species use detailShapeFromCell() exactly like FAMILY and GENUS. */
+/* v55: species use compact equal-radius geometry inside equal-weight allocation cells. */
 
 function addLazyTaxon(raw){
   if(!raw||raw.id==null)return byId.get(String(raw?.id));
@@ -1934,18 +1932,54 @@ function layoutLazyChildren(parent){
     .filter(c=>['FAMILY','GENUS','SPECIES'].includes(detailRank(c)));
   if(!cs.length)return;
 
-  /* v54: one recursive rule at every taxonomic level. detailWeight() makes
-     FAMILY/GENUS proportional to descendant species count and every SPECIES
-     exactly weight 1. Every child then uses 70% of its allocation cell, so
-     genus -> species behaves identically to order -> family and family -> genus. */
+  /* v55: FAMILY and GENUS keep the proven weighted recursive partition.
+     For GENUS -> SPECIES the allocation cells are still equal-weight (1 each),
+     but the visible species are compact equal circles that stay INSIDE those
+     disjoint cells. One common radius is chosen for the whole genus, so every
+     species has exactly the same visible area and no long treemap sliver can
+     turn into a huge white/coloured shape at deep zoom. */
   const cells=detailPartition(parent.poly,cs,String(parent.id),0,new Map());
+  const speciesLevel=detailRank(parent)==='GENUS' && cs.every(c=>detailRank(c)==='SPECIES');
+  let commonSpeciesRadius=null;
+  if(speciesLevel){
+    const valid=cs.map(c=>({c,cell:cells.get(String(c.id))})).filter(x=>x.cell&&x.cell.length>=3);
+    const avgCellArea=valid.length?valid.reduce((s,x)=>s+absArea(x.cell),0)/valid.length:0;
+    const targetR=Math.sqrt(Math.max(0,avgCellArea*DETAIL_LAND_FRACTION)/Math.PI);
+    let minFit=targetR;
+    for(const x of valid){
+      const ctr=polygonCentroid(x.cell);
+      let lo=0,hi=targetR;
+      for(let k=0;k<24;k++){
+        const r=(lo+hi)/2;
+        let ok=pointInPoly(ctr,x.cell);
+        for(let j=0;ok&&j<24;j++){
+          const a=2*Math.PI*j/24;
+          if(!pointInPoly({x:ctr.x+Math.cos(a)*r,y:ctr.y+Math.sin(a)*r},x.cell))ok=false;
+        }
+        if(ok)lo=r;else hi=r;
+      }
+      minFit=Math.min(minFit,lo);
+    }
+    commonSpeciesRadius=Math.max(0,minFit*.96);
+  }
+
   for(const c of cs){
     const cell=cells.get(String(c.id));
     if(!cell||cell.length<3)continue;
 
     c.cellPoly=cell;
     const childRank=detailRank(c);
-    c.poly=detailShapeFromCell(cell,c,DETAIL_LAND_FRACTION);
+    if(speciesLevel&&childRank==='SPECIES'){
+      const ctr=polygonCentroid(cell),r=commonSpeciesRadius||0;
+      const pts=[];
+      for(let j=0;j<28;j++){
+        const a=2*Math.PI*j/28;
+        pts.push({x:ctr.x+Math.cos(a)*r,y:ctr.y+Math.sin(a)*r});
+      }
+      c.poly=cleanPoly(pts);
+    }else{
+      c.poly=detailShapeFromCell(cell,c,DETAIL_LAND_FRACTION);
+    }
     c.box=polyBBox(c.poly);
     c.center=polygonCentroid(c.poly);
     c.area=absArea(c.poly);
@@ -2450,9 +2484,9 @@ function anim(ts){
   const landPct=Math.max(0,Math.min(100,100*(payload.meta.worldLandFraction||0)));
   const openPct=100-landPct;
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
-  status.textContent=`v54 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
+  status.textContent=`v55 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v54 · recursive species allocation' ,payload.meta.worldLandFraction);
+console.log('Atlas v55 · compact equal species cells',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
