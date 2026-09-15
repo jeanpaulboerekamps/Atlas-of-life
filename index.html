@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — v52 echte soorten diep zoombaar</title>
+<title>Atlas of Life — v53 één specieslaag</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -13,6 +13,7 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 .grid{fill:none;stroke:#d7f4fb;stroke-width:2;opacity:.10;vector-effect:non-scaling-stroke}
 .taxonPath{cursor:pointer;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke;transition:opacity .18s,filter .12s;filter:drop-shadow(0 1px 1px #052b3a14)}
 .taxonPath:hover{filter:brightness(1.045)}
+.speciesDot{fill:#f39a38!important;fill-opacity:1!important;stroke:#ee722d!important;stroke-width:.35!important;filter:none!important}
 /* v41: lightweight rendering while the user is actively navigating. */
 svg.fastInteraction .taxonPath{filter:none!important}
 svg.fastInteraction .label{display:none!important}
@@ -85,7 +86,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v52 · echte soorten · diep zoombaar</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v53 · één specieslaag · vaste stippen</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1578,7 +1579,7 @@ function renderTaxon(t){
   const existing=renderedById.get(sid);
   if(existing){
     existing.p.setAttribute('d',d);
-    existing.p.setAttribute('fill',fillFor(t));
+    existing.p.setAttribute('fill',detailRank(t)==='SPECIES'?'#f39a38':fillFor(t));
     existing.text.setAttribute('x',t.center.x);
     existing.text.setAttribute('y',t.center.y);
     existing.text.textContent=t.vernacularName||t.canonicalName;
@@ -1604,9 +1605,9 @@ function renderTaxon(t){
 
   const p=document.createElementNS(NS,'path');
   p.setAttribute('d',d);
-  p.setAttribute('fill',fillFor(t));
+  p.setAttribute('fill',detailRank(t)==='SPECIES'?'#f39a38':fillFor(t));
   p.setAttribute('fill-opacity','.98');
-  p.setAttribute('class','taxonPath');
+  p.setAttribute('class',detailRank(t)==='SPECIES'?'taxonPath speciesDot':'taxonPath');
 
   {
     const rr=(t.rank||'').toUpperCase();
@@ -1614,9 +1615,15 @@ function renderTaxon(t){
       p.setAttribute('filter','url(#landTexture)');
   }
 
-  p.setAttribute('stroke',edgeColorFor(t));
-  p.setAttribute('stroke-opacity','.34');
-  p.setAttribute('stroke-width','1.05');
+  if(detailRank(t)==='SPECIES'){
+    p.setAttribute('stroke','#ee722d');
+    p.setAttribute('stroke-opacity','1');
+    p.setAttribute('stroke-width','.35');
+  }else{
+    p.setAttribute('stroke',edgeColorFor(t));
+    p.setAttribute('stroke-opacity','.34');
+    p.setAttribute('stroke-width','1.05');
+  }
 
   {
     const rr=(t.rank||'').toUpperCase();
@@ -1763,7 +1770,7 @@ const DETAIL_LAND_FRACTION=.70;
    SPECIES are no longer scaled copies of treemap cells. Every species is a
    compact equal-area symbol with a fixed world-space radius. The partition
    cell is used only to choose its position, never its size or shape. */
-const SPECIES_RADIUS=.12;
+const SPECIES_RADIUS=.055;
 const SPECIES_MATERIALISE_Z=6.0;
 const SPECIES_FOCUS_Z=220;
 const MAX_MANUAL_Z=800;
@@ -1900,7 +1907,8 @@ function detailShapeFromCell(cell,t,coverage=DETAIL_LAND_FRACTION){
 }
 
 
-/* v52: fixed compact species geometry retained from v51. This deliberately ignores allocation
+/* v53: SINGLE species renderer. Species geometry is always this fixed compact polygon; no cell-sized species path exists.
+   v52: fixed compact species geometry retained from v51. This deliberately ignores allocation
    cell area/aspect ratio. All species therefore have exactly the same polygon
    area (up to floating point precision) and cannot inflate in species-poor
    genera. */
@@ -2462,9 +2470,9 @@ function anim(ts){
   const landPct=Math.max(0,Math.min(100,100*(payload.meta.worldLandFraction||0)));
   const openPct=100-landPct;
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
-  status.textContent=`v52 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
+  status.textContent=`v53 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v52 · real fixed species with deep zoom',payload.meta.worldLandFraction);
+console.log('Atlas v53 · single fixed species layer',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
