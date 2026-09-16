@@ -1,59 +1,116 @@
-name: Refresh taxonomy
+name: Refresh iNaturalist taxonomy and coordinates
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "17 4 1 * *"
+    - cron: "17 4 3 * *"
 
 permissions:
   contents: write
 
+concurrency:
+  group: atlas-inaturalist-refresh
+  cancel-in-progress: false
+
 jobs:
-  refresh:
+  taxonomy:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
-
-    env:
-      DETAIL_AUDIT_WORKERS: "16"
-      DETAIL_ORDER_WORKERS: "4"
-      DETAIL_FAMILY_WORKERS: "6"
-
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Generate iNaturalist taxonomy with Dutch and English names
+        run: python -u generator/generate-inaturalist.py
+      - name: Upload generated taxonomy
+        uses: actions/upload-artifact@v4
+        with:
+          name: inaturalist-taxonomy
+          path: data
+          if-no-files-found: error
+          retention-days: 2
 
-      - name: Generate bounded COL XR taxonomy
-        run: python -u generator/generate.py
-
-      - name: Audit FAMILY GENUS SPECIES counts
-        run: python -u generator/generate-details.py --audit
-
-      - name: Generate FAMILY GENUS SPECIES detail in parallel
-        run: python -u generator/generate-details.py --generate
-
-      - name: Commit refreshed taxonomy
+  export-coordinate-shards:
+    needs: taxonomy
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    env:
+      POINT_EXPORT_WORKERS: "4"
+      POINT_EXPORT_BATCH: "6"
+      POINT_SHARD_COUNT: "16"
+      POINT_SHARD_INDEX: "${{ matrix.shard }}"
+      POINT_OUTPUT_DIR: "point-output/shard-${{ matrix.shard }}"
+      ATLAS_EXPORT_URL: "http://127.0.0.1:8765/"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set aside checked-in taxonomy snapshot
+        run: mv data data.previous
+      - uses: actions/download-artifact@v4
+        with:
+          name: inaturalist-taxonomy
+          path: data
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install coordinate exporter
         run: |
-          if git diff --quiet data; then
+          npm install --no-save --no-package-lock playwright@1.52.0
+          npx playwright install --with-deps chromium
+      - name: Export coordinate shard
+        run: |
+          python3 -m http.server 8765 --bind 127.0.0.1 > /tmp/atlas-http.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            curl --silent --fail http://127.0.0.1:8765/ > /dev/null && break
+            sleep 1
+          done
+          curl --silent --fail http://127.0.0.1:8765/ > /dev/null
+          node generator/generate-points.mjs
+      - name: Upload coordinate shard
+        uses: actions/upload-artifact@v4
+        with:
+          name: point-shard-${{ matrix.shard }}
+          path: point-output/shard-${{ matrix.shard }}
+          if-no-files-found: error
+          retention-days: 2
+
+  publish:
+    needs: [taxonomy, export-coordinate-shards]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set aside checked-in taxonomy snapshot
+        run: mv data data.previous
+      - uses: actions/download-artifact@v4
+        with:
+          name: inaturalist-taxonomy
+          path: data
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: point-shard-*
+          path: point-artifacts
+          merge-multiple: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Merge id-based coordinate shards
+        run: node generator/merge-points.mjs
+      - name: Commit one consistent taxonomy snapshot
+        run: |
+          if [ -z "$(git status --porcelain -- data)" ]; then
             echo "No taxonomy changes."
             exit 0
           fi
-
           git config user.name "atlas-of-life-bot"
           git config user.email "actions@users.noreply.github.com"
-
-          git add data/taxa.json
-          git add data/detail_audit.json
-          git add data/detail_manifest.json
-          git add data/orders
-          git add data/families
-          git add data/search
-
-          if [ -f data/detail_failures.json ]; then
-            git add data/detail_failures.json
-          fi
-
-          git commit -m "Refresh taxonomy and audited lower-rank detail"
+          git add data
+          git commit -m "Refresh iNaturalist taxonomy, names, and coordinates"
           git push
