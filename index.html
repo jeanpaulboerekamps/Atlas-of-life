@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — v77 ruimtelijke waarnemingslaag</title>
+<title>Atlas of Life — v83 iNaturalist-taxonomie</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -92,7 +92,7 @@ svg.fastInteraction .latin{display:none!important}
 </svg>
 <canvas id="personalDensity" aria-hidden="true"></canvas>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v77 · ruimtelijke waarnemingslaag</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v83 · iNaturalist-taxonomie</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -2473,8 +2473,9 @@ window.atlasExportOrderPoints=async orderId=>{
         if(seen.has(sid))continue;
         seen.add(sid);
         points.push([
-          norm(species.canonicalName||species.name),
-          +species.center.x.toFixed(6),+species.center.y.toFixed(6)
+          String(species.id),
+          +species.center.x.toFixed(6),+species.center.y.toFixed(6),
+          norm(species.canonicalName||species.name)
         ]);
       }
     }
@@ -2593,9 +2594,10 @@ async function findLazyTaxon(q){
     searchShardCache.set(prefix,rows);
   }
 
-  let hit=rows.find(x=>x.n===q);
-  if(!hit)hit=rows.find(x=>x.n?.startsWith(q));
-  if(!hit)hit=rows.find(x=>x.n?.includes(q));
+  const aliases=x=>Array.isArray(x.a)?x.a:[x.n];
+  let hit=rows.find(x=>aliases(x).includes(q));
+  if(!hit)hit=rows.find(x=>aliases(x).some(a=>a?.startsWith(q)));
+  if(!hit)hit=rows.find(x=>aliases(x).some(a=>a?.includes(q)));
   if(!hit)return null;
 
   await ensureOrderDetails(hit.o);
@@ -2630,9 +2632,29 @@ function publishPersonalResult(type,matched,total){
   window.parent.postMessage({type,matched,total},'*');
 }
 let pointFamilyIndexPromise=null;
+const pointTaxonShardPromises=new Map();
+function pointTaxonPrefix(value){
+  const s=String(value||'').replace(/[^A-Za-z0-9]/g,'').toLowerCase();
+  return(s+'__').slice(0,2);
+}
+function loadPointTaxonShard(prefix){
+  if(!pointTaxonShardPromises.has(prefix)){
+    pointTaxonShardPromises.set(prefix,
+      fetch(`data/points/taxa/${safeDetailId(prefix)}.json`,{cache:'force-cache'})
+        .then(r=>r.ok?r.json():{points:[]}).catch(()=>({points:[]}))
+    );
+  }
+  return pointTaxonShardPromises.get(prefix);
+}
 async function loadPersonalCoordinates(records){
-  const wanted=new Set(records.map(r=>norm(r?.SPECIES)).filter(Boolean));
-  if(!wanted.size){
+  const wantedById=new Map(),wantedNames=new Set();
+  for(const record of records){
+    const id=record?.taxonId??record?.taxon_id??record?.species_id;
+    if(id!=null&&String(id))wantedById.set(String(id),record);
+    const name=norm(record?.scientificName||record?.SPECIES);
+    if(name)wantedNames.add(name);
+  }
+  if(!wantedById.size&&!wantedNames.size){
     personalCoordinates=[];personalCoordinateVersion++;lastOverlayKey='';
     publishPersonalResult('atlas-observations-applied',0,records.length);
     return{matched:0,total:records.length};
@@ -2640,18 +2662,35 @@ async function loadPersonalCoordinates(records){
   personalLegend.style.display='block';
   personalLegend.querySelector('span:last-child').textContent='soortcoördinaten laden…';
   try{
-    if(!pointFamilyIndexPromise){
+    const matched=new Map();
+    const prefixes=[...new Set([...wantedById.keys()].map(pointTaxonPrefix))];
+    await Promise.all(prefixes.map(async prefix=>{
+      const payload=await loadPointTaxonShard(prefix);
+      for(const row of payload.points||[]){
+        const id=String(row[0]);
+        if(wantedById.has(id)&&!matched.has(id))
+          matched.set(id,{id,n:norm(row[3]),x:+row[1],y:+row[2],o:String(row[4]||''),f:String(row[5]||'')});
+      }
+    }));
+    const unresolvedNames=new Set();
+    for(const record of records){
+      const id=record?.taxonId??record?.taxon_id??record?.species_id;
+      if(id!=null&&matched.has(String(id)))continue;
+      const name=norm(record?.scientificName||record?.SPECIES);
+      if(name)unresolvedNames.add(name);
+    }
+    if(unresolvedNames.size&&!pointFamilyIndexPromise){
       pointFamilyIndexPromise=fetch('data/points/family-index.json',{cache:'force-cache'})
         .then(r=>{if(!r.ok)throw new Error(`puntenindex ${r.status}`);return r.json()});
     }
-    const index=await pointFamilyIndexPromise;
+    const index=unresolvedNames.size?await pointFamilyIndexPromise:null;
     const familyIds=new Set();
-    for(const record of records){
+    for(const record of unresolvedNames.size?records:[]){
       const familyIdsForName=index.families?.[norm(record?.FAMILY)]||[];
       const genusIdsForName=index.genera?.[norm(record?.GENUS)]||[];
       for(const id of [...familyIdsForName,...genusIdsForName])familyIds.add(String(id));
     }
-    const ids=[...familyIds],matched=new Map();
+    const ids=[...familyIds],matchedNames=new Set([...matched.values()].map(p=>p.n));
     let next=0,done=0;
     async function worker(){
       while(next<ids.length){
@@ -2661,9 +2700,13 @@ async function loadPersonalCoordinates(records){
           if(!r.ok)continue;
           const payload=await r.json();
           for(const row of payload.points||[]){
-            const name=norm(row[0]);
-            if(wanted.has(name)&&!matched.has(name))
-              matched.set(name,{n:name,x:+row[1],y:+row[2]});
+            const isV83=row.length>=4;
+            const name=norm(isV83?row[3]:row[0]);
+            if(unresolvedNames.has(name)&&!matchedNames.has(name)){
+              const taxonId=isV83?String(row[0]):'';
+              matched.set(taxonId||`name:${name}`,{id:taxonId||null,n:name,x:+row[1],y:+row[2]});
+              matchedNames.add(name);
+            }
           }
         }finally{
           done++;
@@ -2703,9 +2746,12 @@ const searchExact=new Map();
 const searchRows=[];
 for(const t of taxa){
   const c=norm(t.canonicalName),v=norm(t.vernacularName);
+  const nl=norm(t.vernacularNameNl),en=norm(t.vernacularNameEn);
   if(c&&!searchExact.has(c))searchExact.set(c,t);
   if(v&&!searchExact.has(v))searchExact.set(v,t);
-  searchRows.push({t,c,v});
+  if(nl&&!searchExact.has(nl))searchExact.set(nl,t);
+  if(en&&!searchExact.has(en))searchExact.set(en,t);
+  searchRows.push({t,c,v,nl,en});
 }
 function findTaxon(q){
   q=norm(q);
@@ -2713,7 +2759,7 @@ function findTaxon(q){
   const exact=searchExact.get(q);
   if(exact)return exact;
   for(const row of searchRows){
-    if(row.c.includes(q)||row.v.includes(q))return row.t;
+    if(row.c.includes(q)||row.v.includes(q)||row.nl.includes(q)||row.en.includes(q))return row.t;
   }
   return null;
 }
@@ -2948,9 +2994,9 @@ function anim(ts){
   const landPct=Math.max(0,Math.min(100,100*(payload.meta.worldLandFraction||0)));
   const openPct=100-landPct;
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
-  status.textContent=`v77 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
+  status.textContent=`v83 · iNaturalist · ${payload.meta.taxa||taxa.length} taxa · ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}%`;
 }
-console.log('Atlas v77 · ruimtelijke waarnemingslaag',payload.meta.worldLandFraction);
+console.log('Atlas v83 · iNaturalist-taxonomie',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
