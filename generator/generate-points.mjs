@@ -7,7 +7,8 @@ import { chromium } from 'playwright';
 const HERE=path.dirname(fileURLToPath(import.meta.url));
 const ROOT=path.dirname(HERE);
 const BASE_URL=process.env.ATLAS_EXPORT_URL||'http://127.0.0.1:8765/';
-const WORKERS=Math.max(1,Number(process.env.POINT_EXPORT_WORKERS||2));
+const WORKERS=Math.max(1,Number(process.env.POINT_EXPORT_WORKERS||4));
+const BATCH_SIZE=Math.max(1,Number(process.env.POINT_EXPORT_BATCH||6));
 const taxaPayload=JSON.parse(await fs.readFile(path.join(ROOT,'data','taxa.json'),'utf8'));
 const orders=taxaPayload.taxa.filter(t=>String(t.rank||'').toUpperCase()==='ORDER'&&t.detailAvailable!==false);
 const staging=path.join(ROOT,'.point-staging');
@@ -33,13 +34,20 @@ function addGenusName(name,id){
 }
 
 async function exportOrder(workerId){
-  while(next<orders.length){
-    const order=orders[next++];
-    const page=await browser.newPage();
-    page.setDefaultTimeout(0);
-    try{
-      await page.goto(BASE_URL,{waitUntil:'networkidle',timeout:0});
-      await page.waitForFunction(()=>typeof window.atlasExportOrderPoints==='function',{timeout:0});
+  const context=await browser.newContext();
+  let page=null,used=0;
+  try{
+    while(next<orders.length){
+      const order=orders[next++];
+      if(!page||used>=BATCH_SIZE){
+        if(page)await page.close();
+        page=await context.newPage();
+        page.setDefaultTimeout(0);
+        await page.goto(BASE_URL,{waitUntil:'networkidle',timeout:0});
+        await page.waitForFunction(()=>typeof window.atlasExportOrderPoints==='function',{timeout:0});
+        used=0;
+      }
+      used++;
       const result=await page.evaluate(id=>window.atlasExportOrderPoints(id),String(order.id));
       for(const family of result.families||[]){
         const id=String(family.id);
@@ -56,9 +64,10 @@ async function exportOrder(workerId){
       }
       completed++;
       console.log(`[${completed}/${orders.length}] worker ${workerId} · ${result.orderName} · ${(result.families||[]).length} families`);
-    }finally{
-      await page.close();
     }
+  }finally{
+    if(page)await page.close();
+    await context.close();
   }
 }
 
@@ -72,7 +81,7 @@ for(const ids of Object.values(familyIndex))ids.sort();
 for(const ids of Object.values(genusIndex))ids.sort();
 await fs.writeFile(path.join(staging,'family-index.json'),JSON.stringify({
   generatedAt:new Date().toISOString(),
-  method:'Atlas v77 browser layout export',
+  method:'Atlas v77.1 batched browser layout export',
   families:familyIndex,
   genera:genusIndex,
   totals:{orders:orders.length,families:totalFamilies,points:totalPoints}
