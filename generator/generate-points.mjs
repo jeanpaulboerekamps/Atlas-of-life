@@ -10,8 +10,14 @@ const BASE_URL=process.env.ATLAS_EXPORT_URL||'http://127.0.0.1:8765/';
 const WORKERS=Math.max(1,Number(process.env.POINT_EXPORT_WORKERS||4));
 const BATCH_SIZE=Math.max(1,Number(process.env.POINT_EXPORT_BATCH||6));
 const taxaPayload=JSON.parse(await fs.readFile(path.join(ROOT,'data','taxa.json'),'utf8'));
-const orders=taxaPayload.taxa.filter(t=>String(t.rank||'').toUpperCase()==='ORDER'&&t.detailAvailable!==false);
-const staging=path.join(ROOT,'.point-staging');
+const allOrders=taxaPayload.taxa.filter(t=>String(t.rank||'').toUpperCase()==='ORDER'&&t.detailAvailable!==false);
+const SHARD_COUNT=Math.max(1,Number(process.env.POINT_SHARD_COUNT||1));
+const SHARD_INDEX=Number(process.env.POINT_SHARD_INDEX||0);
+if(!Number.isInteger(SHARD_INDEX)||SHARD_INDEX<0||SHARD_INDEX>=SHARD_COUNT)
+  throw new Error(`Invalid shard ${SHARD_INDEX}/${SHARD_COUNT}`);
+const orders=allOrders.filter((_,i)=>i%SHARD_COUNT===SHARD_INDEX);
+const destination=path.resolve(ROOT,process.env.POINT_OUTPUT_DIR||'data/points');
+const staging=destination+'.staging';
 const familiesDir=path.join(staging,'families');
 await fs.rm(staging,{recursive:true,force:true});
 await fs.mkdir(familiesDir,{recursive:true});
@@ -81,13 +87,14 @@ for(const ids of Object.values(familyIndex))ids.sort();
 for(const ids of Object.values(genusIndex))ids.sort();
 await fs.writeFile(path.join(staging,'family-index.json'),JSON.stringify({
   generatedAt:new Date().toISOString(),
-  method:'Atlas v77.1 batched browser layout export',
+  method:'Atlas v77.2 parallel sharded browser layout export',
+  shard:{index:SHARD_INDEX,count:SHARD_COUNT,sourceOrders:allOrders.length},
   families:familyIndex,
   genera:genusIndex,
   totals:{orders:orders.length,families:totalFamilies,points:totalPoints}
 }),'utf8');
 
-const destination=path.join(ROOT,'data','points');
 await fs.rm(destination,{recursive:true,force:true});
+await fs.mkdir(path.dirname(destination),{recursive:true});
 await fs.rename(staging,destination);
-console.log(`POINT EXPORT OK · ${totalPoints} species · ${totalFamilies} family shards`);
+console.log(`POINT SHARD ${SHARD_INDEX+1}/${SHARD_COUNT} OK · ${totalPoints} species · ${totalFamilies} family files`);
