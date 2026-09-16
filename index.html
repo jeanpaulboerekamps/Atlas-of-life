@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — v65 vrije kralenkettingen</title>
+<title>Atlas of Life — v66 persoonlijke heatmap</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -23,6 +23,10 @@ svg.fastInteraction .latin{display:none!important}
 
 .label{font-weight:760;fill:#102f28;pointer-events:none;stroke:none;paint-order:normal}
 .speciesLabelOnBlack{fill:#fffdf8}.speciesLabelOnWhite{fill:#111}
+.speciesLabelObserved{fill:#fff}
+.personalLegend{position:absolute;right:16px;top:76px;padding:8px 11px;font-size:11px;
+  color:#123b55;display:none}.personalLegend .swatch{display:inline-block;width:10px;height:10px;
+  border-radius:50%;background:#087fd1;margin-right:6px;vertical-align:-1px}
 .hidden{opacity:0;pointer-events:none}
 .top{position:absolute;left:16px;right:16px;top:14px;display:flex;gap:10px;align-items:center;pointer-events:none}
 .card{background:var(--panel);border:1px solid #35524723;border-radius:16px;box-shadow:0 9px 30px #3552471d;backdrop-filter:blur(11px);pointer-events:auto}
@@ -85,7 +89,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v65 · vrijliggende soortenkettingen</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v66 · persoonlijke biodiversiteitslaag</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -93,6 +97,7 @@ svg.fastInteraction .latin{display:none!important}
 <div id="status" class="card status">taxonomie laden…</div>
 <div id="level" class="card level">wereld</div>
 <div id="zoom" class="card zoom">1.00×</div>
+<div id="personalLegend" class="card personalLegend"><span class="swatch"></span><span></span></div>
 </div>
 <script>
 (async()=>{try{
@@ -101,6 +106,7 @@ const svg=document.getElementById('map');
 const hg=document.getElementById('halos'), rg=document.getElementById('regions'), og=document.getElementById('genusOverlays'), lg=document.getElementById('labels');
 const status=document.getElementById('status'), zoomEl=document.getElementById('zoom');
 const levelEl=document.getElementById('level'), crumbs=document.getElementById('crumbs');
+const personalLegend=document.getElementById('personalLegend');
 
 const payload=await fetch('data/taxa.json',{cache:'no-store'}).then(r=>r.json());
 const taxa=payload.taxa;
@@ -1561,7 +1567,23 @@ const renderedById=new Map();
    large enough on screen. */
 const deferredSpeciesByGenus=new Map();
 const deferredSpeciesIds=new Set();
+const personalSeenCounts=new Map(),personalSpeciesIds=new Set();
+let personalMode=false,personalMaxSeen=1;
 function speciesBeadFill(t){return ((+t.speciesChainIndex||0)&1)?'#fffdf8':'#111'}
+function displayFill(t){
+  const id=String(t.id),rank=detailRank(t);
+  if(personalSpeciesIds.has(id))return'#087fd1';
+  const seen=personalSeenCounts.get(id)||0;
+  if(personalMode&&seen>0){
+    const strength=.30+.60*Math.sqrt(seen/Math.max(1,personalMaxSeen));
+    return mixHex(fillFor(t),'#087fd1',Math.min(.90,strength));
+  }
+  return rank==='SPECIES'?speciesBeadFill(t):fillFor(t);
+}
+function speciesLabelClass(t){
+  if(personalSpeciesIds.has(String(t.id)))return'label speciesLabelObserved';
+  return ((+t.speciesChainIndex||0)&1)?'label speciesLabelOnWhite':'label speciesLabelOnBlack';
+}
 
 function renderTaxon(t){
   if(!t||t.id==='__life'||!t.poly||t.poly.length<3)return;
@@ -1579,7 +1601,7 @@ function renderTaxon(t){
   const existing=renderedById.get(sid);
   if(existing){
     existing.p.setAttribute('d',d);
-    existing.p.setAttribute('fill',detailRank(t)==='SPECIES'?speciesBeadFill(t):fillFor(t));
+    existing.p.setAttribute('fill',displayFill(t));
     existing.text.setAttribute('x',t.center.x);
     existing.text.setAttribute('y',t.center.y);
     existing.text.textContent=t.vernacularName||t.canonicalName;
@@ -1605,7 +1627,7 @@ function renderTaxon(t){
 
   const p=document.createElementNS(NS,'path');
   p.setAttribute('d',d);
-  p.setAttribute('fill',detailRank(t)==='SPECIES'?speciesBeadFill(t):fillFor(t));
+  p.setAttribute('fill',displayFill(t));
   p.setAttribute('fill-opacity','.98');
   p.setAttribute('class',detailRank(t)==='SPECIES'?'taxonPath speciesDot':'taxonPath');
 
@@ -1640,7 +1662,7 @@ function renderTaxon(t){
   label.setAttribute('y',t.center.y);
   label.setAttribute('text-anchor','middle');
   label.setAttribute('class','label');
-  if(detailRank(t)==='SPECIES')label.setAttribute('class',((+t.speciesChainIndex||0)&1)?'label speciesLabelOnWhite':'label speciesLabelOnBlack');
+  if(detailRank(t)==='SPECIES')label.setAttribute('class',speciesLabelClass(t));
   const labelName=t.vernacularName||t.canonicalName||t.name||'';
   if(detailRank(t)==='SPECIES'){
     const parts=String(labelName).trim().split(/\s+/);
@@ -2446,6 +2468,78 @@ async function findLazyTaxon(q){
   return taxon;
 }
 
+/* v66: MijnBiodiversiteit sends scientific species names. The search shard
+   already contains the Atlas species, genus, family and order IDs, so the
+   personal heatmap can be built without loading all detail files. */
+let personalRequest=0;
+function refreshPersonalColors(){
+  for(const o of elems){
+    o.p.setAttribute('fill',displayFill(o.t));
+    if(detailRank(o.t)==='SPECIES')o.text.setAttribute('class',speciesLabelClass(o.t));
+  }
+}
+async function applyPersonalObservations(rawNames){
+  const request=++personalRequest;
+  const names=[...new Set((Array.isArray(rawNames)?rawNames:[])
+    .map(x=>norm(x).trim()).filter(Boolean))];
+  personalSeenCounts.clear();personalSpeciesIds.clear();
+  personalMode=true;personalMaxSeen=1;
+
+  const groups=new Map();
+  for(const name of names){
+    const prefix=detailSearchPrefix(name);
+    if(!groups.has(prefix))groups.set(prefix,[]);
+    groups.get(prefix).push(name);
+  }
+
+  const hits=[];
+  for(const [prefix,wanted] of groups){
+    let rows=searchShardCache.get(prefix);
+    if(rows===undefined){
+      try{
+        const r=await fetch(`data/search/${prefix}.json`,{cache:'force-cache'});
+        rows=r.ok?await r.json():[];
+      }catch(_){rows=[]}
+      searchShardCache.set(prefix,rows);
+    }
+    if(request!==personalRequest)return;
+    const exact=new Map(rows.filter(x=>x.r==='SPECIES').map(x=>[x.n,x]));
+    for(const name of wanted){
+      let hit=exact.get(name);
+      if(!hit){
+        const binomial=name.split(/\s+/).slice(0,2).join(' ');
+        hit=exact.get(binomial);
+      }
+      if(hit)hits.push(hit);
+    }
+  }
+
+  const unique=[...new Map(hits.map(x=>[String(x.id),x])).values()];
+  const add=id=>{
+    if(id==null)return;
+    id=String(id);personalSeenCounts.set(id,(personalSeenCounts.get(id)||0)+1);
+  };
+  for(const hit of unique){
+    personalSpeciesIds.add(String(hit.id));
+    for(const id of [hit.id,hit.g,hit.f,hit.o])add(id);
+    let ancestor=byId.get(String(hit.o));
+    while(ancestor?.parentId){
+      ancestor=byId.get(String(ancestor.parentId));
+      if(ancestor)add(ancestor.id);
+    }
+  }
+  personalMaxSeen=Math.max(1,unique.length);
+  refreshPersonalColors();
+  personalLegend.style.display='block';
+  personalLegend.querySelector('span:last-child').textContent=
+    `${unique.length} van ${names.length} waargenomen soorten gekoppeld`;
+  window.parent.postMessage({type:'atlas-observations-applied',matched:unique.length,total:names.length},'*');
+}
+window.addEventListener('message',event=>{
+  if(event.data?.type==='atlas-observations')applyPersonalObservations(event.data.speciesNames);
+});
+window.parent.postMessage({type:'atlas-ready'},'*');
+
 /* v40: normalize names once instead of repeatedly normalizing ~2,000 taxa
    on every search. */
 const searchExact=new Map();
@@ -2668,7 +2762,7 @@ function anim(ts){
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
   status.textContent=`v55 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v65 · vrijliggende zwart-witte soortenkettingen',payload.meta.worldLandFraction);
+console.log('Atlas v66 · persoonlijke heatmap',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
