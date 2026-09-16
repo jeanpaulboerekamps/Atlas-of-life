@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — v69 directe persoonlijke heatmap</title>
+<title>Atlas of Life — v70 persoonlijke kralenkettingen</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -89,7 +89,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v69 · directe persoonlijke biodiversiteitslaag</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v70 · persoonlijke kralenkettingen</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1740,14 +1740,16 @@ function focus(t,instant=false){
        explicitly opened. This prevents a pan/zoom from creating thousands of
        SVG nodes while preserving the complete bead chain on demand. */
     if(personalMode&&genus){
-      materialiseSpeciesForGenus(genus,Math.max(8,2400/r.w));
+      materialiseSpeciesForGenus(genus,Math.max(8,2400/r.w),null,true);
       lastSemantic=-1;
       semantic(2400/view.w,true);
     }
   });
   else if(rr==='SPECIES'){
     const genus=byId.get(String(t.parentId));
-    if(genus)materialiseSpeciesForGenus(genus,2400/r.w,t);
+    if(genus)materialiseSpeciesForGenus(
+      genus,Math.max(SPECIES_MATERIALISE_Z,2400/r.w),personalMode?null:t,personalMode
+    );
     renderTaxon(t);
   }
 
@@ -2361,7 +2363,7 @@ async function ensureGenusSpecies(genusOrId){
 }
 
 
-function materialiseSpeciesForGenus(genus,z,forceOne=null){
+function materialiseSpeciesForGenus(genus,z,forceOne=null,forceAll=false){
   if(!genus)return 0;
   const gid=String(genus.id);
   const list=deferredSpeciesByGenus.get(gid)||[];
@@ -2379,7 +2381,7 @@ function materialiseSpeciesForGenus(genus,z,forceOne=null){
     if(forceOne && String(s.id)!==String(forceOne.id))continue;
     if(renderedIds.has(String(s.id)))continue;
 
-    if(forceOne || intersectsView(s.box,view,.24)){
+    if(forceAll || forceOne || intersectsView(s.box,view,.24)){
       renderTaxon(s);
       made++;
     }
@@ -2477,7 +2479,9 @@ async function findLazyTaxon(q){
   const taxon=byId.get(String(hit.id))||null;
   if(taxon&&detailRank(taxon)==='SPECIES'){
     const genus=byId.get(String(taxon.parentId));
-    if(genus)materialiseSpeciesForGenus(genus,Math.max(8,2400/view.w),taxon);
+    if(genus)materialiseSpeciesForGenus(
+      genus,Math.max(SPECIES_MATERIALISE_Z,2400/view.w),personalMode?null:taxon,personalMode
+    );
     renderTaxon(taxon);
   }
   return taxon;
@@ -2582,6 +2586,14 @@ function semantic(z,force=false){
     const zoomVisible=z>=+o.p.dataset.minz;
     const onScreen=intersectsView(o.t.box,view);
     const visible=zoomVisible&&onScreen;
+
+    /* v70: the genus heat is a navigation cue, not a permanent blue
+       backdrop. Once its bead chain exists, restore the normal genus colour
+       so black, white and observed blue species stay individually legible. */
+    if(detailRank(o.t)==='GENUS'&&generaWithVisibleSpecies.has(String(o.t.id)))
+      o.p.setAttribute('fill',fillFor(o.t));
+    else
+      o.p.setAttribute('fill',displayFill(o.t));
 
     o.p.style.display=visible?'':'none';
     o.p.classList.toggle('hidden',!visible);
@@ -2747,7 +2759,7 @@ function anim(ts){
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
   status.textContent=`v55 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v69 · directe persoonlijke heatmap',payload.meta.worldLandFraction);
+console.log('Atlas v70 · persoonlijke kralenkettingen',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
