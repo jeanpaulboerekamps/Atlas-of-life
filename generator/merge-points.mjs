@@ -9,6 +9,7 @@ const INPUT=path.resolve(ROOT,process.env.POINT_SHARDS_DIR||'point-artifacts');
 const OUTPUT=path.join(ROOT,'data','points');
 const STAGING=path.join(ROOT,'.points-merge');
 const FAMILIES=path.join(STAGING,'families');
+const TAXA=path.join(STAGING,'taxa');
 
 async function findIndexes(dir){
   const found=[];
@@ -26,10 +27,12 @@ function add(target,name,ids){
 
 await fs.rm(STAGING,{recursive:true,force:true});
 await fs.mkdir(FAMILIES,{recursive:true});
+await fs.mkdir(TAXA,{recursive:true});
 const indexes=(await findIndexes(INPUT)).sort();
 if(!indexes.length)throw new Error(`No point shards found in ${INPUT}`);
 
 const families={},genera={},copied=new Set();
+const taxonShardSources=new Map();
 let orders=0,familyCount=0,points=0;
 for(const indexPath of indexes){
   const payload=JSON.parse(await fs.readFile(indexPath,'utf8'));
@@ -39,6 +42,7 @@ for(const indexPath of indexes){
   familyCount+=Number(payload.totals?.families||0);
   points+=Number(payload.totals?.points||0);
   const sourceFamilies=path.join(path.dirname(indexPath),'families');
+  const sourceTaxa=path.join(path.dirname(indexPath),'taxa');
   let entries=[];
   try{entries=await fs.readdir(sourceFamilies,{withFileTypes:true})}
   catch(err){if(err?.code!=='ENOENT')throw err}
@@ -48,12 +52,29 @@ for(const indexPath of indexes){
     copied.add(entry.name);
     await fs.copyFile(path.join(sourceFamilies,entry.name),path.join(FAMILIES,entry.name));
   }
+  let taxonEntries=[];
+  try{taxonEntries=await fs.readdir(sourceTaxa,{withFileTypes:true})}
+  catch(err){if(err?.code!=='ENOENT')throw err}
+  for(const entry of taxonEntries){
+    if(!entry.isFile()||!entry.name.endsWith('.json'))continue;
+    if(!taxonShardSources.has(entry.name))taxonShardSources.set(entry.name,[]);
+    taxonShardSources.get(entry.name).push(path.join(sourceTaxa,entry.name));
+  }
 }
 for(const ids of Object.values(families))ids.sort();
 for(const ids of Object.values(genera))ids.sort();
+for(const [filename,sources] of taxonShardSources){
+  const rows=[];
+  for(const source of sources){
+    const payload=JSON.parse(await fs.readFile(source,'utf8'));
+    rows.push(...(payload.points||[]));
+  }
+  rows.sort((a,b)=>String(a[0]).localeCompare(String(b[0]),'en',{numeric:true}));
+  await fs.writeFile(path.join(TAXA,filename),JSON.stringify({points:rows}),'utf8');
+}
 await fs.writeFile(path.join(STAGING,'family-index.json'),JSON.stringify({
   generatedAt:new Date().toISOString(),
-  method:'Atlas v77.2 merged parallel coordinate export',
+  method:'Atlas v83 merged iNaturalist-id coordinate export',
   sourceShards:indexes.length,
   families,genera,
   totals:{orders,families:familyCount,points}
