@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — v64 kralenkettingen</title>
+<title>Atlas of Life — v65 vrije kralenkettingen</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -85,7 +85,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v64 · zwart-witte soortenkettingen</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v65 · vrijliggende soortenkettingen</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1982,7 +1982,7 @@ function detailClearance(p,poly){
 }
 // Only pathological silhouettes use a compact core. Every point of this
 // gently lobed contour lies inside a verified inscribed circle.
-function detailSafeGenusCore(poly,t){
+function detailLargestInscribedCircle(poly){
   const b=polyBBox(poly);
   let best={x:b.x+b.w/2,y:b.y+b.h/2},radius=detailClearance(best,poly);
   let region={...b};
@@ -1995,6 +1995,10 @@ function detailSafeGenusCore(poly,t){
     region={x:best.x-region.w/10,y:best.y-region.h/10,w:region.w/5,h:region.h/5};
   }
   if(!(radius>0))throw new Error('Geen veilige genuskern');
+  return{center:best,radius};
+}
+function detailSafeGenusCore(poly,t){
+  const safe=detailLargestInscribedCircle(poly),best=safe.center,radius=safe.radius;
   const phase=h2(t.id,63000)*Math.PI*2;
   return Array.from({length:40},(_,i)=>{
     const a=i*Math.PI*2/40,r=radius*(.94+.025*Math.sin(3*a+phase));
@@ -2002,38 +2006,31 @@ function detailSafeGenusCore(poly,t){
   });
 }
 function detailPackSpecies(poly,count,wanted){
-  const b=polyBBox(poly);
+  const safe=detailLargestInscribedCircle(poly);
   function attempt(r){
-    const rows=[],dx=2.04*r,dy=2.04*r;
-    for(let row=0,y=b.y+r;y<=b.y+b.h-r;y+=dy,row++){
-      const beads=[];
-      for(let x=b.x+r;x<=b.x+b.w-r;x+=dx){
-        const p={x,y};
-        if(detailClearance(p,poly)>=r*1.015)beads.push(p);
+    const points=[{...safe.center}],pitch=4.55*r,spiral=pitch/(2*Math.PI),step=2.08*r;
+    let theta=0;
+    for(let i=1;i<count;i++){
+      const prev=points[points.length-1];
+      const at=a=>({x:safe.center.x+spiral*a*Math.cos(a),y:safe.center.y+spiral*a*Math.sin(a)});
+      let lo=theta,hi=theta+Math.max(.12,step/Math.max(spiral,spiral*theta));
+      while(Math.hypot(at(hi).x-prev.x,at(hi).y-prev.y)<step)hi+=(hi-theta||.2);
+      for(let k=0;k<24;k++){
+        const mid=(lo+hi)/2,p=at(mid);
+        if(Math.hypot(p.x-prev.x,p.y-prev.y)<step)lo=mid;else hi=mid;
       }
-      if(beads.length)rows.push(row%2?beads.reverse():beads);
+      theta=(lo+hi)/2;
+      const p=at(theta);
+      if(detailClearance(p,poly)<r*1.015)return null;
+      points.push(p);
     }
-    const all=rows.flat();
-    if(all.length<count)return null;
-    /* Pick the most continuous section of the serpentine raster. This keeps
-       consecutive beads together even when the genus has an indentation. */
-    let best=all.slice(0,count),bestScore=Infinity,bestLongest=Infinity;
-    for(let start=0;start<=all.length-count;start++){
-      const q=all.slice(start,start+count);
-      let longest=0,total=0;
-      for(let i=1;i<q.length;i++){
-        const d=Math.hypot(q[i].x-q[i-1].x,q[i].y-q[i-1].y)/r;
-        longest=Math.max(longest,d);total+=d;
-      }
-      const c=q.reduce((s,p)=>({x:s.x+p.x,y:s.y+p.y}),{x:0,y:0});
-      const centrePenalty=Math.hypot(c.x/count-(b.x+b.w/2),c.y/count-(b.y+b.h/2))/r*.01;
-      const score=longest*10+total+centrePenalty;
-      if(score<bestScore){best=q;bestScore=score;bestLongest=longest;}
-    }
-    return bestLongest<=2.10?best:null;
+    /* Adjacent beads almost touch; every other pair needs visible air. */
+    for(let i=0;i<points.length;i++)for(let j=i+2;j<points.length;j++)
+      if(Math.hypot(points[i].x-points[j].x,points[i].y-points[j].y)<r*2.65)return null;
+    return points;
   }
-  let r=Math.min(wanted,Math.sqrt(absArea(poly)/Math.max(1,count)/Math.PI)*.8);
-  for(let k=0;k<100;k++,r*=.88){
+  let r=Math.min(wanted,safe.radius/Math.sqrt(Math.max(1,count)*3.2));
+  for(let k=0;k<100;k++,r*=.94){
     const points=attempt(r);
     if(points)return{points,r};
   }
@@ -2671,7 +2668,7 @@ function anim(ts){
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
   status.textContent=`v55 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v64 · zwart-witte soortenkettingen',payload.meta.worldLandFraction);
+console.log('Atlas v65 · vrijliggende zwart-witte soortenkettingen',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
