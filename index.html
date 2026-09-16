@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — v66 persoonlijke heatmap</title>
+<title>Atlas of Life — v67 lichte persoonlijke heatmap</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -89,7 +89,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v66 · persoonlijke biodiversiteitslaag</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v67 · lichte persoonlijke biodiversiteitslaag</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1729,7 +1729,16 @@ function focus(t,instant=false){
   const rr=(t.rank||'').toUpperCase();
   if(rr==='ORDER')ensureOrderDetails(t);
   else if(rr==='FAMILY')ensureFamilySpecies(t);
-  else if(rr==='GENUS')ensureGenusSpecies(t);
+  else if(rr==='GENUS')ensureGenusSpecies(t).then(genus=>{
+    /* In personal mode species are materialised only for the genus the user
+       explicitly opened. This prevents a pan/zoom from creating thousands of
+       SVG nodes while preserving the complete bead chain on demand. */
+    if(personalMode&&genus){
+      materialiseSpeciesForGenus(genus,Math.max(8,2400/r.w));
+      lastSemantic=-1;
+      semantic(2400/view.w,true);
+    }
+  });
   else if(rr==='SPECIES'){
     const genus=byId.get(String(t.parentId));
     if(genus)materialiseSpeciesForGenus(genus,2400/r.w,t);
@@ -2468,53 +2477,29 @@ async function findLazyTaxon(q){
   return taxon;
 }
 
-/* v66: MijnBiodiversiteit sends scientific species names. The search shard
+/* v67: MijnBiodiversiteit sends scientific species names. The search shard
    already contains the Atlas species, genus, family and order IDs, so the
    personal heatmap can be built without loading all detail files. */
 let personalRequest=0;
+let personalPendingSignature='',personalAppliedSignature='',personalApplyPromise=null;
+let personalLastResult={matched:0,total:0};
 function refreshPersonalColors(){
   for(const o of elems){
     o.p.setAttribute('fill',displayFill(o.t));
     if(detailRank(o.t)==='SPECIES')o.text.setAttribute('class',speciesLabelClass(o.t));
   }
 }
-async function applyPersonalObservations(rawNames){
-  const request=++personalRequest;
-  const names=[...new Set((Array.isArray(rawNames)?rawNames:[])
-    .map(x=>norm(x).trim()).filter(Boolean))];
+function publishPersonalResult(type,matched,total){
+  const label=type==='atlas-observations-applied'
+    ? `${matched} van ${total} waargenomen soorten gekoppeld`
+    : `${matched} van ${total} soorten gekoppeld…`;
+  personalLegend.style.display='block';
+  personalLegend.querySelector('span:last-child').textContent=label;
+  window.parent.postMessage({type,matched,total},'*');
+}
+function rebuildPersonalHeat(hitMap){
   personalSeenCounts.clear();personalSpeciesIds.clear();
-  personalMode=true;personalMaxSeen=1;
-
-  const groups=new Map();
-  for(const name of names){
-    const prefix=detailSearchPrefix(name);
-    if(!groups.has(prefix))groups.set(prefix,[]);
-    groups.get(prefix).push(name);
-  }
-
-  const hits=[];
-  for(const [prefix,wanted] of groups){
-    let rows=searchShardCache.get(prefix);
-    if(rows===undefined){
-      try{
-        const r=await fetch(`data/search/${prefix}.json`,{cache:'force-cache'});
-        rows=r.ok?await r.json():[];
-      }catch(_){rows=[]}
-      searchShardCache.set(prefix,rows);
-    }
-    if(request!==personalRequest)return;
-    const exact=new Map(rows.filter(x=>x.r==='SPECIES').map(x=>[x.n,x]));
-    for(const name of wanted){
-      let hit=exact.get(name);
-      if(!hit){
-        const binomial=name.split(/\s+/).slice(0,2).join(' ');
-        hit=exact.get(binomial);
-      }
-      if(hit)hits.push(hit);
-    }
-  }
-
-  const unique=[...new Map(hits.map(x=>[String(x.id),x])).values()];
+  const unique=[...hitMap.values()];
   const add=id=>{
     if(id==null)return;
     id=String(id);personalSeenCounts.set(id,(personalSeenCounts.get(id)||0)+1);
@@ -2530,10 +2515,74 @@ async function applyPersonalObservations(rawNames){
   }
   personalMaxSeen=Math.max(1,unique.length);
   refreshPersonalColors();
-  personalLegend.style.display='block';
-  personalLegend.querySelector('span:last-child').textContent=
-    `${unique.length} van ${names.length} waargenomen soorten gekoppeld`;
-  window.parent.postMessage({type:'atlas-observations-applied',matched:unique.length,total:names.length},'*');
+  return unique.length;
+}
+async function runPersonalObservations(names,signature,request){
+  personalSeenCounts.clear();personalSpeciesIds.clear();
+  personalMode=true;personalMaxSeen=1;
+  refreshPersonalColors();
+  publishPersonalResult('atlas-observations-progress',0,names.length);
+
+  const groups=new Map();
+  for(const name of names){
+    const prefix=detailSearchPrefix(name);
+    if(!groups.has(prefix))groups.set(prefix,[]);
+    groups.get(prefix).push(name);
+  }
+
+  const entries=[...groups.entries()],hitMap=new Map(),batchSize=3;
+  for(let start=0;start<entries.length;start+=batchSize){
+    const batch=entries.slice(start,start+batchSize);
+    const loaded=await Promise.all(batch.map(async([prefix,wanted])=>{
+      let rows=searchShardCache.get(prefix);
+      if(rows===undefined){
+        try{
+          const r=await fetch(`data/search/${prefix}.json`,{cache:'force-cache'});
+          rows=r.ok?await r.json():[];
+        }catch(_){rows=[]}
+        searchShardCache.set(prefix,rows);
+      }
+      return{rows,wanted};
+    }));
+    if(request!==personalRequest)return personalLastResult;
+    for(const {rows,wanted} of loaded){
+      const exact=new Map(rows.filter(x=>x.r==='SPECIES').map(x=>[x.n,x]));
+      for(const name of wanted){
+        let hit=exact.get(name);
+        if(!hit)hit=exact.get(name.split(/\s+/).slice(0,2).join(' '));
+        if(hit)hitMap.set(String(hit.id),hit);
+      }
+    }
+    const matched=rebuildPersonalHeat(hitMap);
+    publishPersonalResult('atlas-observations-progress',matched,names.length);
+    await new Promise(resolve=>requestAnimationFrame(resolve));
+  }
+  const matched=rebuildPersonalHeat(hitMap);
+  personalAppliedSignature=signature;
+  personalLastResult={matched,total:names.length};
+  publishPersonalResult('atlas-observations-applied',matched,names.length);
+  return personalLastResult;
+}
+function applyPersonalObservations(rawNames){
+  const names=[...new Set((Array.isArray(rawNames)?rawNames:[])
+    .map(x=>norm(x).trim()).filter(Boolean))].sort();
+  const signature=names.join('\u0000');
+  if(signature===personalAppliedSignature){
+    publishPersonalResult('atlas-observations-applied',personalLastResult.matched,personalLastResult.total);
+    return Promise.resolve(personalLastResult);
+  }
+  if(signature===personalPendingSignature&&personalApplyPromise)return personalApplyPromise;
+  const request=++personalRequest;
+  personalPendingSignature=signature;
+  const promise=runPersonalObservations(names,signature,request);
+  personalApplyPromise=promise;
+  promise.finally(()=>{
+    if(personalApplyPromise===promise){
+      personalApplyPromise=null;
+      personalPendingSignature='';
+    }
+  });
+  return promise;
 }
 window.addEventListener('message',event=>{
   if(event.data?.type==='atlas-observations')applyPersonalObservations(event.data.speciesNames);
@@ -2626,8 +2675,8 @@ function semantic(z,force=false){
   }
 
   /* Never block the render loop on network I/O. */
-  if(z>=2.5)queueMicrotask(()=>maybeLoadVisibleDetails(z));
-  if(z>=SPECIES_MATERIALISE_Z)queueMicrotask(()=>{
+  if(!personalMode&&z>=2.5)queueMicrotask(()=>maybeLoadVisibleDetails(z));
+  if(!personalMode&&z>=SPECIES_MATERIALISE_Z)queueMicrotask(()=>{
     const made=materialiseVisibleSpecies(z);
     if(made)requestAnimationFrame(()=>semantic(z,true));
   });
@@ -2762,7 +2811,7 @@ function anim(ts){
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
   status.textContent=`v55 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v66 · persoonlijke heatmap',payload.meta.worldLandFraction);
+console.log('Atlas v67 · lichte persoonlijke heatmap',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
