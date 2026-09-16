@@ -2,7 +2,7 @@
 <html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Atlas of Life — v63 veilige genusvormen</title>
+<title>Atlas of Life — v64 kralenkettingen</title>
 <style>
 :root{--sea:#1e9fd0;--ink:#17372f;--panel:#fffdf9f5;--muted:#60776e}
 *{box-sizing:border-box}
@@ -13,17 +13,16 @@ svg{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-sele
 .grid{fill:none;stroke:#d7f4fb;stroke-width:2;opacity:.10;vector-effect:non-scaling-stroke}
 .taxonPath{cursor:pointer;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke;transition:opacity .18s,filter .12s;filter:drop-shadow(0 1px 1px #052b3a14)}
 .taxonPath:hover{filter:brightness(1.045)}
-.speciesDot{fill:#f39a38!important;fill-opacity:1!important;stroke:#ee722d!important;stroke-width:.35!important;filter:none!important}
+.speciesDot{fill-opacity:1!important;stroke:#303030!important;stroke-width:.42!important;filter:none!important}
 /* v41: lightweight rendering while the user is actively navigating. */
 svg.fastInteraction .taxonPath{filter:none!important}
 svg.fastInteraction .label{display:none!important}
 svg.fastInteraction .latin{display:none!important}
 .continentHaloWide,.continentHaloNear{display:none}
-.genusBoundary{fill:none;stroke:#fffdf8;stroke-width:2.2;stroke-opacity:.92;
-  stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke;
-  pointer-events:none;filter:drop-shadow(0 1px 1px #052b3a22)}
+.genusBoundary{display:none}
 
 .label{font-weight:760;fill:#102f28;pointer-events:none;stroke:none;paint-order:normal}
+.speciesLabelOnBlack{fill:#fffdf8}.speciesLabelOnWhite{fill:#111}
 .hidden{opacity:0;pointer-events:none}
 .top{position:absolute;left:16px;right:16px;top:14px;display:flex;gap:10px;align-items:center;pointer-events:none}
 .card{background:var(--panel);border:1px solid #35524723;border-radius:16px;box-shadow:0 9px 30px #3552471d;backdrop-filter:blur(11px);pointer-events:auto}
@@ -86,7 +85,7 @@ svg.fastInteraction .latin{display:none!important}
 <g id="halos"></g><g id="regions"></g><g id="genusOverlays"></g><g id="labels"></g>
 </svg>
 <div class="top">
-  <div class="card brand"><b>Atlas of Life</b><small>v63 · veilige genusvormen · passende soorten</small></div>
+  <div class="card brand"><b>Atlas of Life</b><small>v64 · zwart-witte soortenkettingen</small></div>
   <div class="card search"><input id="search" placeholder="Zoek taxon…" autocomplete="off"></div>
   <div class="card controls"><button id="home">Wereld</button></div>
 </div>
@@ -1562,6 +1561,7 @@ const renderedById=new Map();
    large enough on screen. */
 const deferredSpeciesByGenus=new Map();
 const deferredSpeciesIds=new Set();
+function speciesBeadFill(t){return ((+t.speciesChainIndex||0)&1)?'#fffdf8':'#111'}
 
 function renderTaxon(t){
   if(!t||t.id==='__life'||!t.poly||t.poly.length<3)return;
@@ -1579,7 +1579,7 @@ function renderTaxon(t){
   const existing=renderedById.get(sid);
   if(existing){
     existing.p.setAttribute('d',d);
-    existing.p.setAttribute('fill',detailRank(t)==='SPECIES'?'#f39a38':fillFor(t));
+    existing.p.setAttribute('fill',detailRank(t)==='SPECIES'?speciesBeadFill(t):fillFor(t));
     existing.text.setAttribute('x',t.center.x);
     existing.text.setAttribute('y',t.center.y);
     existing.text.textContent=t.vernacularName||t.canonicalName;
@@ -1605,7 +1605,7 @@ function renderTaxon(t){
 
   const p=document.createElementNS(NS,'path');
   p.setAttribute('d',d);
-  p.setAttribute('fill',detailRank(t)==='SPECIES'?'#f39a38':fillFor(t));
+  p.setAttribute('fill',detailRank(t)==='SPECIES'?speciesBeadFill(t):fillFor(t));
   p.setAttribute('fill-opacity','.98');
   p.setAttribute('class',detailRank(t)==='SPECIES'?'taxonPath speciesDot':'taxonPath');
 
@@ -1616,7 +1616,7 @@ function renderTaxon(t){
   }
 
   if(detailRank(t)==='SPECIES'){
-    p.setAttribute('stroke','#ee722d');
+    p.setAttribute('stroke','#303030');
     p.setAttribute('stroke-opacity','1');
     p.setAttribute('stroke-width','.35');
   }else{
@@ -1640,6 +1640,7 @@ function renderTaxon(t){
   label.setAttribute('y',t.center.y);
   label.setAttribute('text-anchor','middle');
   label.setAttribute('class','label');
+  if(detailRank(t)==='SPECIES')label.setAttribute('class',((+t.speciesChainIndex||0)&1)?'label speciesLabelOnWhite':'label speciesLabelOnBlack');
   const labelName=t.vernacularName||t.canonicalName||t.name||'';
   if(detailRank(t)==='SPECIES'){
     const parts=String(labelName).trim().split(/\s+/);
@@ -2003,15 +2004,33 @@ function detailSafeGenusCore(poly,t){
 function detailPackSpecies(poly,count,wanted){
   const b=polyBBox(poly);
   function attempt(r){
-    const points=[],dx=2.12*r,dy=Math.sqrt(3)*1.06*r;
+    const rows=[],dx=2.04*r,dy=2.04*r;
     for(let row=0,y=b.y+r;y<=b.y+b.h-r;y+=dy,row++){
-      for(let x=b.x+r+(row%2)*dx/2;x<=b.x+b.w-r;x+=dx){
+      const beads=[];
+      for(let x=b.x+r;x<=b.x+b.w-r;x+=dx){
         const p={x,y};
-        if(detailClearance(p,poly)>=r*1.025)points.push(p);
-        if(points.length===count)return points;
+        if(detailClearance(p,poly)>=r*1.015)beads.push(p);
       }
+      if(beads.length)rows.push(row%2?beads.reverse():beads);
     }
-    return null;
+    const all=rows.flat();
+    if(all.length<count)return null;
+    /* Pick the most continuous section of the serpentine raster. This keeps
+       consecutive beads together even when the genus has an indentation. */
+    let best=all.slice(0,count),bestScore=Infinity,bestLongest=Infinity;
+    for(let start=0;start<=all.length-count;start++){
+      const q=all.slice(start,start+count);
+      let longest=0,total=0;
+      for(let i=1;i<q.length;i++){
+        const d=Math.hypot(q[i].x-q[i-1].x,q[i].y-q[i-1].y)/r;
+        longest=Math.max(longest,d);total+=d;
+      }
+      const c=q.reduce((s,p)=>({x:s.x+p.x,y:s.y+p.y}),{x:0,y:0});
+      const centrePenalty=Math.hypot(c.x/count-(b.x+b.w/2),c.y/count-(b.y+b.h/2))/r*.01;
+      const score=longest*10+total+centrePenalty;
+      if(score<bestScore){best=q;bestScore=score;bestLongest=longest;}
+    }
+    return bestLongest<=2.10?best:null;
   }
   let r=Math.min(wanted,Math.sqrt(absArea(poly)/Math.max(1,count)/Math.PI)*.8);
   for(let k=0;k<100;k++,r*=.88){
@@ -2084,7 +2103,7 @@ function layoutLazyChildren(parent){
     const packed=detailPackSpecies(parent.poly,cs.length,commonSpeciesRadius);
     parent.speciesRadiusScale=packed.r/commonSpeciesRadius;
     commonSpeciesRadius=packed.r;
-    relaxedSpecies=cs.map((c,i)=>({t:c,...packed.points[i]}));
+    relaxedSpecies=cs.map((c,i)=>{c.speciesChainIndex=i;return{t:c,...packed.points[i]}});
   }
 
   for(const c of cs){
@@ -2652,7 +2671,7 @@ function anim(ts){
   const worstPct=100*(payload.meta.worstChildLandFraction||0);
   status.textContent=`v55 · ${payload.meta.taxa||taxa.length} taxa · ORDER-FIRST ${payload.meta.orderFirstCount||0} ordes · wereld open ${openPct.toFixed(1)}% · slechtste lokaal open ${(100-worstPct).toFixed(1)}% (${payload.meta.worstChildTaxon||'—'} → ${payload.meta.worstChildRank||'—'})`;
 }
-console.log('Atlas v63 · contained species + compact partition selection',payload.meta.worldLandFraction);
+console.log('Atlas v64 · zwart-witte soortenkettingen',payload.meta.worldLandFraction);
 home();requestAnimationFrame(anim);
 }catch(err){
   console.error(err);
