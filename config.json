@@ -1,14 +1,9 @@
 {
   "taxonomy": {
-    "provider": "GBIF Species API / Catalogue of Life eXtended Release",
-    "datasetKey": "7ddf754f-d193-4cc9-b351-99906754a03b",
-    "apiBase": "https://api.gbif.org/v1",
-    "roots": [
-      "Animalia",
-      "Plantae",
-      "Fungi",
-      "Bacteria"
-    ]
+    "provider": "iNaturalist Taxonomy Darwin Core Archive",
+    "archive": "https://www.inaturalist.org/taxa/inaturalist-taxonomy.dwca.zip",
+    "identifier": "iNaturalist taxon id",
+    "nameLocales": ["nl", "en"]
   },
   "limits": {
     "maxDepth": 6,
